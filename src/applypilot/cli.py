@@ -393,7 +393,7 @@ def doctor() -> None:
         results.append(("LLM API key", ok_mark, f"Local: {os.environ.get('LLM_URL')}"))
     else:
         results.append(("LLM API key", fail_mark,
-                        "Set GEMINI_API_KEY in ~/.applypilot/.env (run 'applypilot init')"))
+                        f"Set GEMINI_API_KEY in {ENV_PATH} (run 'applypilot init')"))
 
     # --- Tier 3 checks ---
     # Claude Code CLI

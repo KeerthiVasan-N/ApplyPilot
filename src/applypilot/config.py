@@ -5,8 +5,15 @@ import platform
 import shutil
 from pathlib import Path
 
-# User data directory — all user-specific files live here
-APP_DIR = Path(os.environ.get("APPLYPILOT_DIR", Path.home() / ".applypilot"))
+from dotenv import load_dotenv
+
+# Load a project-local .env first so APPLYPILOT_DIR can be set per-checkout
+# (existing environment variables are never overridden).
+load_dotenv()
+
+# User data directory — all user-specific files live here.
+# Defaults to ~/.applypilot; override with APPLYPILOT_DIR (env var or .env).
+APP_DIR = Path(os.environ.get("APPLYPILOT_DIR", Path.home() / ".applypilot")).expanduser().resolve()
 
 # Core paths
 DB_PATH = APP_DIR / "applypilot.db"

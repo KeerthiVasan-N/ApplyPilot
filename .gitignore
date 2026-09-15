@@ -1,39 +1,79 @@
-# User data (NEVER commit)
-profile.json
-resume.txt
-resume.pdf
+# ---------------------------------------------------------------------------
+# User data (NEVER commit) - lives in this repo when APPLYPILOT_DIR points here
+# ---------------------------------------------------------------------------
+.env
 *.env
 .env.*
 !.env.example
+profile.json
+searches.yaml
+resume.txt
+resume.pdf
+resume.docx
+resume.md
+dashboard.html
 
 # Runtime artifacts
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
 tailored_resumes/
 cover_letters/
 chrome-workers/
 apply-workers/
 apply_logs/
 logs/
+*.log
+.applypilot/
 
 # MCP configs (per-machine)
 .mcp*.json
 
+# ---------------------------------------------------------------------------
 # Python
+# ---------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+.python-version
 *.egg-info/
+*.egg
 dist/
 build/
-*.egg
+.eggs/
+pip-wheel-metadata/
 
-# IDE
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ---------------------------------------------------------------------------
+# Node / Playwright (npx MCP server)
+# ---------------------------------------------------------------------------
+node_modules/
+playwright-report/
+test-results/
+
+# ---------------------------------------------------------------------------
+# IDE / OS
+# ---------------------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
 

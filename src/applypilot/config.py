@@ -27,6 +27,7 @@ ENV_PATH = APP_DIR / ".env"
 TAILORED_DIR = APP_DIR / "tailored_resumes"
 COVER_LETTER_DIR = APP_DIR / "cover_letters"
 LOG_DIR = APP_DIR / "logs"
+OUTPUT_DIR = APP_DIR / "output"  # per-job folders from `applypilot tailor-url`
 
 # Chrome worker isolation
 CHROME_WORKER_DIR = APP_DIR / "chrome-workers"
@@ -94,7 +95,7 @@ def get_chrome_user_data() -> Path:
 
 def ensure_dirs():
     """Create all required directories."""
-    for d in [APP_DIR, TAILORED_DIR, COVER_LETTER_DIR, LOG_DIR, CHROME_WORKER_DIR, APPLY_WORKER_DIR]:
+    for d in [APP_DIR, TAILORED_DIR, COVER_LETTER_DIR, LOG_DIR, OUTPUT_DIR, CHROME_WORKER_DIR, APPLY_WORKER_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -176,6 +177,13 @@ DEFAULTS = {
     "apply_timeout": 300,
     "viewport": "1280x900",
 }
+
+
+def get_llm_status() -> bool:
+    """True when any LLM provider is configured via environment."""
+    if os.environ.get("LLM_PROVIDER", "").strip().lower() in ("claude", "claude-cli", "claude-code"):
+        return shutil.which("claude") is not None
+    return any(os.environ.get(k) for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL"))
 
 
 def load_env():

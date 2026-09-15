@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -256,6 +257,85 @@ def apply(
     )
 
 
+@app.command("tailor-url")
+def tailor_url(
+    url: str = typer.Option(..., "--url", "-u", help="Job posting URL. Redirects are followed to the real posting."),
+    resume: Path = typer.Option(
+        ..., "--resume", "-r", exists=True, dir_okay=False, readable=True,
+        help="Path to your LaTeX resume (.tex, single file).",
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o",
+        help="Output folder. Default: <data dir>/output/<company>_<role>/",
+    ),
+    no_pdf: bool = typer.Option(False, "--no-pdf", help="Write the .tex only, skip PDF compilation."),
+) -> None:
+    """Tailor a LaTeX resume to ONE job URL (skips discover/score; never applies)."""
+    from applypilot.config import load_env, ensure_dirs, get_llm_status
+    from applypilot.scoring import tailor_tex as tt
+
+    load_env()
+    ensure_dirs()
+    if not get_llm_status():
+        console.print("[red]No LLM configured.[/red] Put GEMINI_API_KEY (or OPENAI_API_KEY / LLM_URL) in .env.")
+        raise typer.Exit(1)
+
+    original = resume.read_text(encoding="utf-8").replace("\r\n", "\n")
+    parts = tt.external_inputs(original, resume.parent)
+    if parts:
+        console.print(f"[red]Failed:[/red] {resume.name} pulls in other files via \\input/\\include ({', '.join(parts)}). "
+                      "Only single-file resumes are supported; inline them first.")
+        raise typer.Exit(1)
+
+    try:
+        with console.status("[bold]1/4[/bold] Fetching job posting..."):
+            job = tt.fetch_job(url)
+        console.print(f"[green]1/4[/green] Job: [bold]{job['title']}[/bold] at [bold]{job['company']}[/bold]  "
+                      f"[dim]({len(job['full_description'])} chars, tier {job.get('tier_used')})[/dim]")
+
+        with console.status("[bold]2/4[/bold] Tailoring resume with the LLM (may retry)..."):
+            tailored, report = tt.tailor_latex(original, job)
+        console.print(f"[green]2/4[/green] Tailored and verified in {report['attempts']} attempt(s)")
+
+        out_dir = out or tt.output_dir_for(job)
+        tex_path = tt.write_outputs(out_dir, original, tailored, job)
+        console.print(f"[green]3/4[/green] Wrote {tex_path}")
+
+        pdf_path = None
+        if no_pdf:
+            console.print("[yellow]4/4[/yellow] Skipped PDF (--no-pdf)")
+        else:
+            with console.status("[bold]4/4[/bold] Compiling PDF..."):
+                pdf_path = tt.compile_pdf(tex_path)
+                pages = tt.pdf_page_count(pdf_path)
+                if pages > tt.MAX_PDF_PAGES:
+                    console.print(f"[yellow]   PDF is {pages} pages; asking the LLM to tighten wording...[/yellow]")
+                    tailored, _ = tt.shorten_latex(original, tailored, job)
+                    tex_path = tt.write_outputs(out_dir, original, tailored, job)
+                    pdf_path = tt.compile_pdf(tex_path)
+                    pages = tt.pdf_page_count(pdf_path)
+            plural = "s" if pages != 1 else ""
+            console.print(f"[green]4/4[/green] Compiled PDF ({pages} page{plural})")
+            if pages > tt.MAX_PDF_PAGES:
+                console.print(f"[yellow]   Still {pages} pages. Check the PDF and trim manually if needed.[/yellow]")
+    except tt.TailorError as e:
+        console.print(f"[red]Failed:[/red] {e}")
+        raise typer.Exit(1) from None
+    except Exception as e:  # noqa: BLE001 - LLM/network errors: print a message, not a traceback
+        msg = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        console.print(f"[red]Failed:[/red] {msg}")
+        if "429" in msg or "Too Many Requests" in msg or "quota" in msg.lower():
+            console.print("[yellow]LLM quota exhausted. Wait a bit, or set LLM_PROVIDER=claude in .env "
+                          "to use the Claude Code CLI instead of the Gemini API.[/yellow]")
+        raise typer.Exit(1) from None
+
+    console.print()
+    console.print(f"[bold]TEX:[/bold]  {tex_path}")
+    if pdf_path:
+        console.print(f"[bold]PDF:[/bold]  {pdf_path}")
+    console.print("[dim]Also in that folder: job.txt (what the LLM saw) and changes.diff (what it changed)[/dim]")
+
+
 @app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""
@@ -383,8 +463,16 @@ def doctor() -> None:
     has_gemini = bool(os.environ.get("GEMINI_API_KEY"))
     has_openai = bool(os.environ.get("OPENAI_API_KEY"))
     has_local = bool(os.environ.get("LLM_URL"))
-    if has_gemini:
-        model = os.environ.get("LLM_MODEL", "gemini-2.0-flash")
+    use_claude_cli = os.environ.get("LLM_PROVIDER", "").strip().lower() in ("claude", "claude-cli", "claude-code")
+    if use_claude_cli:
+        claude_path = shutil.which("claude")
+        if claude_path:
+            model = os.environ.get("LLM_MODEL") or "CLI default"
+            results.append(("LLM API key", ok_mark, f"Claude Code CLI ({model})"))
+        else:
+            results.append(("LLM API key", fail_mark, "LLM_PROVIDER=claude but 'claude' CLI not found on PATH"))
+    elif has_gemini:
+        model = os.environ.get("LLM_MODEL", "gemini-3.6-flash")
         results.append(("LLM API key", ok_mark, f"Gemini ({model})"))
     elif has_openai:
         model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
@@ -427,6 +515,15 @@ def doctor() -> None:
     else:
         results.append(("CapSolver API key", "[dim]optional[/dim]",
                         "Set CAPSOLVER_API_KEY in .env for CAPTCHA solving"))
+
+    # LaTeX compiler (only needed for `applypilot tailor-url` PDF output)
+    from applypilot.scoring.tailor_tex import find_latex_compiler
+    compiler = find_latex_compiler()
+    if compiler:
+        results.append(("LaTeX compiler", ok_mark, f"{compiler[0]}: {compiler[1]}"))
+    else:
+        results.append(("LaTeX compiler", "[dim]optional[/dim]",
+                        "For tailor-url PDFs: put tectonic.exe in .venv/Scripts (or winget install MiKTeX.MiKTeX)"))
 
     # --- Render results ---
     console.print()

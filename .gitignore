@@ -11,6 +11,8 @@ resume.txt
 resume.pdf
 resume.docx
 resume.md
+resume.tex
+main.tex
 dashboard.html
 
 # Runtime artifacts
@@ -26,6 +28,7 @@ chrome-workers/
 apply-workers/
 apply_logs/
 logs/
+output/
 *.log
 .applypilot/
 

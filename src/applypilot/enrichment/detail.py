@@ -267,9 +267,14 @@ def extract_from_json_ld(intel: dict) -> dict | None:
         if not apply_url:
             apply_url = posting.get("url")
 
+        org = posting.get("hiringOrganization")
+        company = org.get("name") if isinstance(org, dict) else (org if isinstance(org, str) else None)
+
         return {
             "full_description": desc_clean,
             "application_url": apply_url,
+            "title": posting.get("title") or None,
+            "company": company or None,
         }
 
     return None
@@ -296,6 +301,7 @@ APPLY_SELECTORS = [
 DESCRIPTION_SELECTORS = [
     '#job-description',
     '#job_description',
+    '.job__description',   # job-boards.greenhouse.io (no JSON-LD there)
     '#jobDescriptionText',
     '.job-description',
     '.job_description',
@@ -560,6 +566,8 @@ def scrape_detail_page(page, url: str) -> dict:
         return result
 
     intel = collect_detail_intelligence(page)
+    result["final_url"] = intel.get("final_url") or url
+    result["page_title"] = intel.get("page_title") or ""
 
     # Tier 1: JSON-LD
     json_ld_result = extract_from_json_ld(intel)

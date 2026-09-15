@@ -10,6 +10,7 @@ Interactive flow that creates ~/.applypilot/ with:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -252,26 +253,33 @@ def _setup_ai_features() -> None:
         default="gemini",
     )
 
-    env_lines = ["# ApplyPilot configuration", ""]
+    new_values: dict[str, str] = {}
 
     if provider == "gemini":
         api_key = Prompt.ask("Gemini API key (from aistudio.google.com)")
-        model = Prompt.ask("Model", default="gemini-2.0-flash")
-        env_lines.append(f"GEMINI_API_KEY={api_key}")
-        env_lines.append(f"LLM_MODEL={model}")
+        model = Prompt.ask("Model", default="gemini-3.6-flash")
+        new_values = {"GEMINI_API_KEY": api_key, "LLM_MODEL": model}
     elif provider == "openai":
         api_key = Prompt.ask("OpenAI API key")
         model = Prompt.ask("Model", default="gpt-4o-mini")
-        env_lines.append(f"OPENAI_API_KEY={api_key}")
-        env_lines.append(f"LLM_MODEL={model}")
+        new_values = {"OPENAI_API_KEY": api_key, "LLM_MODEL": model}
     elif provider == "local":
         url = Prompt.ask("Local LLM endpoint URL", default="http://localhost:8080/v1")
         model = Prompt.ask("Model name", default="local-model")
-        env_lines.append(f"LLM_URL={url}")
-        env_lines.append(f"LLM_MODEL={model}")
+        new_values = {"LLM_URL": url, "LLM_MODEL": model}
 
-    env_lines.append("")
-    ENV_PATH.write_text("\n".join(env_lines), encoding="utf-8")
+    # Merge into an existing .env (keeps APPLYPILOT_DIR, CAPSOLVER_API_KEY, proxies, comments)
+    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else ["# ApplyPilot configuration"]
+    for key, value in new_values.items():
+        replaced = False
+        for i, line in enumerate(lines):
+            if re.match(rf"^\s*#?\s*{key}\s*=", line):
+                lines[i] = f"{key}={value}"
+                replaced = True
+                break
+        if not replaced:
+            lines.append(f"{key}={value}")
+    ENV_PATH.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
     console.print(f"[green]AI configuration saved to {ENV_PATH}[/green]")
 
 

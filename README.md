@@ -158,6 +158,42 @@ applypilot apply --gen --url URL       # generate prompt file for manual debuggi
 
 ---
 
+## Bring Your Own Jobs: `tailor-url`
+
+Already have a job-discovery system? Skip discover / enrich / score and tailor a
+LaTeX resume to one posting:
+
+```bash
+applypilot tailor-url --url "https://boards.example.com/jobs/123" --resume path/to/main.tex
+```
+
+It follows redirects to the employer's real posting, extracts the description
+(same cascade as the enrich stage), asks the LLM to edit **only** the summary,
+bullet wording and skills ordering, verifies that the preamble, header, sections,
+companies, titles, dates and every metric are untouched, then writes:
+
+```
+<data dir>/output/<company>_<role>/
+  resume.tex     tailored LaTeX (same formatting as your original)
+  resume.pdf     compiled with tectonic or pdflatex (whichever is on PATH)
+  job.txt        the posting text the LLM saw
+  changes.diff   exactly what changed vs. your original
+```
+
+PDF compilation needs `tectonic` or `pdflatex` on PATH. Easiest: download `tectonic.exe`
+from the [tectonic releases](https://github.com/tectonic-typesetting/tectonic/releases)
+and drop it into `.venv/Scripts/` (or `pip`'s bin dir); the first compile downloads
+the TeX packages it needs. `applypilot doctor` shows which compiler was found.
+Overleaf compiles with pdflatex by default; if you want byte-for-byte the same engine,
+install MiKTeX (`winget install MiKTeX.MiKTeX`) and set `LATEX_COMPILER=pdflatex` in `.env`.
+
+Options: `--out <folder>` to choose the output folder, `--no-pdf` to skip compiling.
+Nothing is submitted; this command never touches the apply stage.
+
+Hitting Gemini free-tier limits? Put `LLM_PROVIDER=claude` in `.env` and every LLM call
+(this command and the tailor/score/cover stages) goes through the Claude Code CLI you
+already have for auto-apply, using your Claude login instead of an API key.
+
 ## CLI Reference
 
 ```

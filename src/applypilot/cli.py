@@ -343,10 +343,15 @@ def tailor_url(
                     console.print(f"[yellow]   PDF is {pages} pages; asking the LLM to tighten wording...[/yellow]")
                     keep = {t.lower() for k in (ats_result["added"] if ats_result else [])
                             for t in [k["term"], *k.get("aliases", [])]}
-                    tailored, _ = tt.shorten_latex(original, tailored, job, allow_skills=keep)
-                    tex_path = tt.write_outputs(out_dir, original, tailored, job)
-                    pdf_path = tt.compile_pdf(tex_path)
-                    pages = tt.pdf_page_count(pdf_path)
+                    shortened, shorten_report = tt.shorten_latex(original, tailored, job, allow_skills=keep)
+                    if shorten_report["status"] == "verified":
+                        tailored = shortened
+                        tex_path = tt.write_outputs(out_dir, original, tailored, job)
+                        pdf_path = tt.compile_pdf(tex_path)
+                        pages = tt.pdf_page_count(pdf_path)
+                    else:
+                        console.print(f"[yellow]   Could not shorten without losing a fact "
+                                      f"({shorten_report['problems'][0]}); kept the long version.[/yellow]")
             plural = "s" if pages != 1 else ""
             console.print(f"[green]5/5[/green] Compiled PDF ({pages} page{plural})")
             if pages > tt.MAX_PDF_PAGES:

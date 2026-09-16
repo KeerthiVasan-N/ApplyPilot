@@ -278,11 +278,19 @@ def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES) -> tuple[s
     raise TailorError("Tailored resume failed verification after retries:\n  - " + "\n  - ".join(report["problems"]))
 
 
-def shorten_latex(tex: str, tailored: str, job: dict, allow_skills: set[str] | None = None) -> tuple[str, dict]:
-    """One extra pass asking the LLM to trim wording so the PDF fits on one page.
+def shorten_latex(
+    tex: str,
+    tailored: str,
+    job: dict,
+    allow_skills: set[str] | None = None,
+    max_retries: int = MAX_RETRIES,
+) -> tuple[str, dict]:
+    """Trim wording so the PDF fits on one page. Returns (tex, report); never raises.
 
     `allow_skills` are terms the ATS gap pass already added to `tailored`; they are
-    not in the original, so the verifier has to be told they may stay.
+    not in the original, so the verifier has to be told they may stay. If no attempt
+    verifies, `tailored` comes back untouched with status "failed_verification" --
+    a resume that runs long is still a resume, so this never sinks the run.
     """
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
@@ -290,23 +298,57 @@ def shorten_latex(tex: str, tailored: str, job: dict, allow_skills: set[str] | N
     )
     system += (
         "\n\nThe previous version compiled to more than one page. Tighten the wording of the "
-        "summary and bullets (fewer words, same facts, same bullet count) so it fits on one page."
+        "summary and bullets (fewer words, same facts, same bullet count) so it fits on one page.\n"
+        "Shorten by cutting filler words, not facts. Every one of these tokens must still appear "
+        "in your output, spelled exactly as it is here:\n" + _must_keep(tailored)
     )
     client = get_client()
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": (
-            f"ORIGINAL LATEX RESUME:\n{tex}\n\n---\n\nTOO-LONG TAILORED VERSION:\n{tailored}\n\n---\n\n"
-            f"TARGET JOB: {job['title']} at {job['company']}\n\nReturn the shortened complete .tex source:"
-        )},
-    ]
-    candidate = _splice_preamble(tex, _strip_fences(client.chat(messages, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2)))
-    problems = verify_latex_edit(
-        tex, candidate, check_length=False, allow_skills=allow_skills, allow_new_categories=bool(allow_skills),
+    user = (
+        f"ORIGINAL LATEX RESUME:\n{tex}\n\n---\n\nTOO-LONG TAILORED VERSION:\n{tailored}\n\n---\n\n"
+        f"TARGET JOB: {job['title']} at {job['company']}\n\nReturn the shortened complete .tex source:"
     )
-    if problems:
-        raise TailorError("Shortened resume failed verification:\n  - " + "\n  - ".join(problems))
-    return candidate, {"attempts": 1, "problems": [], "status": "verified"}
+
+    problems: list[str] = []
+    for attempt in range(max_retries + 1):
+        prompt = system
+        if problems:
+            prompt += "\n\nFIX THESE PROBLEMS FROM YOUR PREVIOUS ATTEMPT:\n" + "\n".join(
+                f"- {p}" for p in problems[:8]
+            )
+        candidate = _splice_preamble(
+            tex, _strip_fences(client.chat(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": user}],
+                max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2,
+            )),
+        )
+        problems = verify_latex_edit(
+            tex, candidate, check_length=False, allow_skills=allow_skills, allow_new_categories=bool(allow_skills),
+        )
+        if not problems:
+            return candidate, {"attempts": attempt + 1, "problems": [], "status": "verified"}
+        log.warning("Shorten attempt %d failed verification: %s", attempt + 1, "; ".join(problems))
+
+    return tailored, {"attempts": max_retries + 1, "problems": problems, "status": "failed_verification"}
+
+
+_TYPESETTING_NUMBER_RE = re.compile(r"(?:in|ex|pt|em|cm|mm)\b")
+
+
+def _must_keep(tex: str) -> str:
+    """The metrics and dates the shortening pass keeps losing, listed for the prompt."""
+    body = _strip_comments(_split_preamble(tex)[1] if _split_preamble(tex) else tex)
+    body = re.sub(r"\\begin\{center\}.*?\\end\{center\}", " ", body, flags=re.DOTALL)  # header: phone, profile ids
+    tokens: list[str] = []
+    for tok in _NUMBER_RE.findall(body) + _DATE_RE.findall(body):
+        tok = tok.strip()
+        if not tok or tok in tokens:
+            continue
+        if re.fullmatch(r"\d{7,}", tok):  # phone numbers and profile ids
+            continue
+        if any(_TYPESETTING_NUMBER_RE.match(body[m.end():]) for m in re.finditer(re.escape(tok), body)):
+            continue  # a LaTeX length like 0.15in, not a fact
+        tokens.append(tok)
+    return "  " + ", ".join(tokens)
 
 
 def _splice_preamble(original: str, candidate: str) -> str:

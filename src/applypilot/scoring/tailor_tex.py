@@ -219,12 +219,12 @@ count is inside the budget, confirm no new skills, confirm the output starts wit
 the original first line and ends with \\end{{document}}, with no fences or notes."""
 
 
-def _hard_limits(tex: str) -> str:
+def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH) -> str:
     """Concrete numbers for the prompt: bullets per section and the word budget."""
     clean = _strip_comments(tex)
     body = _split_preamble(clean)
     words = len((body[1] if body else clean).split())
-    lo, hi = int(words * (1 - LENGTH_TOLERANCE)), int(words * (1 + LENGTH_GROWTH))
+    lo, hi = int(words * (1 - LENGTH_TOLERANCE)), int(words * (1 + max_growth))
     budget = (
         f"- Word count of the document body (excluding comments) must stay between {lo} and {hi} "
         f"(original: {words}). The original already fills the page: if you uncomment a skills line, "
@@ -278,8 +278,12 @@ def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES) -> tuple[s
     raise TailorError("Tailored resume failed verification after retries:\n  - " + "\n  - ".join(report["problems"]))
 
 
-def shorten_latex(tex: str, tailored: str, job: dict) -> tuple[str, dict]:
-    """One extra pass asking the LLM to trim wording so the PDF fits on one page."""
+def shorten_latex(tex: str, tailored: str, job: dict, allow_skills: set[str] | None = None) -> tuple[str, dict]:
+    """One extra pass asking the LLM to trim wording so the PDF fits on one page.
+
+    `allow_skills` are terms the ATS gap pass already added to `tailored`; they are
+    not in the original, so the verifier has to be told they may stay.
+    """
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
         summary_section=summary_section, skills_section=skills_section, hard_limits=_hard_limits(tex),
@@ -297,7 +301,9 @@ def shorten_latex(tex: str, tailored: str, job: dict) -> tuple[str, dict]:
         )},
     ]
     candidate = _splice_preamble(tex, _strip_fences(client.chat(messages, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2)))
-    problems = verify_latex_edit(tex, candidate, check_length=False)
+    problems = verify_latex_edit(
+        tex, candidate, check_length=False, allow_skills=allow_skills, allow_new_categories=bool(allow_skills),
+    )
     if problems:
         raise TailorError("Shortened resume failed verification:\n  - " + "\n  - ".join(problems))
     return candidate, {"attempts": 1, "problems": [], "status": "verified"}
@@ -401,8 +407,57 @@ def _skill_items(text: str) -> set[str]:
     return items
 
 
-def verify_latex_edit(original: str, tailored: str, check_length: bool = True) -> list[str]:
-    """Return a list of human-readable problems; empty list means the edit is acceptable."""
+# Things that are never "just a keyword": claiming one is a checkable lie, so no pass may add them.
+_CREDENTIAL_RE = re.compile(
+    r"\b(?:certified|certificat\w*|licen[cs]ed?|accredited|bachelor\w*|master'?s|ph\.?\s?d|"
+    r"doctorate|degree|diploma|b\.?tech|m\.?tech|b\.?e\.?|m\.?s\.?c|mba)\b",
+    re.IGNORECASE,
+)
+
+
+_FILLER_WORDS = {"and", "or", "with", "for", "the", "in", "of", "to", "on", "a", "an", "using", "via"}
+
+
+def _covered_by(item: str, terms: set[str], extra_words: set[str] = frozenset()) -> bool:
+    """True if this skills item is a rephrasing of the terms the gap pass was allowed to add.
+
+    The pass is told to add "enterprise analytics" and "AI agents"; models write
+    "Analytics and AI" or "Business Intelligence (Bitcoin)". Rejecting those for not
+    matching the term list character for character is what made the pass a no-op, so
+    an item passes if it contains an allowed term OR is built entirely out of words
+    from allowed terms and the skills the resume already lists.
+
+    Credentials are excluded whatever the wording: that is the one phrasing that turns
+    a keyword into a claim someone can check.
+    """
+    if not terms or _CREDENTIAL_RE.search(item):
+        return False
+    if any(re.search(rf"(?<![A-Za-z0-9+#]){re.escape(term)}(?![A-Za-z0-9+#])", item) for term in terms):
+        return True
+    allowed_words = {w for term in terms for w in _words(term)} | extra_words
+    item_words = _words(item)
+    return bool(item_words) and item_words <= allowed_words
+
+
+def _words(text: str) -> set[str]:
+    """Meaningful lowercase words of a skills item ('AI agents' -> {ai, agents})."""
+    return {w for w in re.split(r"[^A-Za-z0-9+#]+", text.lower()) if w and w not in _FILLER_WORDS}
+
+
+def verify_latex_edit(
+    original: str,
+    tailored: str,
+    check_length: bool = True,
+    allow_skills: set[str] | None = None,
+    allow_new_categories: bool = False,
+    max_growth: float = LENGTH_GROWTH,
+) -> list[str]:
+    """Return a list of human-readable problems; empty list means the edit is acceptable.
+
+    `allow_skills` / `allow_new_categories` / `max_growth` are the knobs the ATS gap pass
+    turns: that pass is allowed to add specific missing terms (see `scoring.ats`), while
+    every other rule -- facts, dates, metrics, bullet counts -- still holds.
+    """
     problems: list[str] = []
 
     if "```" in tailored:
@@ -427,6 +482,13 @@ def verify_latex_edit(original: str, tailored: str, check_length: bool = True) -
         problems.append("Unbalanced braces in output.")
     if re.search(r"\\(usepackage|newcommand|renewcommand|def)\b", _strip_comments(t_body)):
         problems.append("New package/macro definitions inside the document body are not allowed.")
+
+    # A degree or certification the original does not have is a checkable lie, not a keyword.
+    o_creds = Counter(m.lower() for m in _CREDENTIAL_RE.findall(_strip_comments(o_body)))
+    t_creds = Counter(m.lower() for m in _CREDENTIAL_RE.findall(_strip_comments(t_body)))
+    invented = sorted(word for word, n in t_creds.items() if n > o_creds[word])
+    if invented:
+        problems.append(f"New certification/degree wording {invented} is never allowed; remove it.")
 
     # Header block must be identical
     o_head = re.search(r"\\begin\{center\}.*?\\end\{center\}", o_body, re.DOTALL)
@@ -453,19 +515,23 @@ def verify_latex_edit(original: str, tailored: str, check_length: bool = True) -
         label = name or "text before the first section"
 
         if name == skills_name:
-            allowed = _skill_items(o_text + "\n" + _section_raw(original, name))
+            allowed = _skill_items(o_text + "\n" + _section_raw(original, name)) | (allow_skills or set())
             whole_file = re.sub(r"\s+", " ", original.lower())
             new_items = sorted(
                 i for i in _skill_items(t_text)
-                if i not in allowed and re.sub(r"\s+", " ", i) not in whole_file
+                if i not in allowed
+                and re.sub(r"\s+", " ", i) not in whole_file
+                and not _covered_by(i, allow_skills or set(), _words(_section_raw(original, name)))
             )
             if new_items:
                 problems.append(f"Skills added that are not in the original file: {new_items[:8]}.")
             # Categories (the \textbf{...} labels) must be ones the file already has
             o_cats = set(re.findall(r"\\textbf\{([^}]*)\}", _section_raw(original, name)))
             new_cats = sorted(set(re.findall(r"\\textbf\{([^}]*)\}", t_text)) - o_cats)
-            if new_cats:
+            if new_cats and not allow_new_categories:
                 problems.append(f"New skill categories are not allowed: {new_cats}.")
+            elif len(new_cats) > 1:
+                problems.append(f"At most one new skill category is allowed, got {new_cats}.")
             continue
 
         o_items, t_items = len(_ITEM_RE.findall(o_text)), len(_ITEM_RE.findall(t_text))
@@ -504,7 +570,7 @@ def verify_latex_edit(original: str, tailored: str, check_length: bool = True) -
 
     if check_length:
         o_words, t_words = len(o_clean.split()), len(t_clean.split())
-        lo, hi = int(o_words * (1 - LENGTH_TOLERANCE)), int(o_words * (1 + LENGTH_GROWTH))
+        lo, hi = int(o_words * (1 - LENGTH_TOLERANCE)), int(o_words * (1 + max_growth))
         if o_words and not lo <= t_words <= hi:
             problems.append(
                 f"Word count {t_words} is outside the allowed {lo}-{hi} (original {o_words}); "

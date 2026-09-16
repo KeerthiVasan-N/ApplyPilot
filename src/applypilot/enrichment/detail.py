@@ -491,6 +491,69 @@ def extract_with_llm(page, url: str) -> dict:
 
 # -- Description cleaning ---------------------------------------------------
 
+# -- Tier 0: LinkedIn guest endpoint ----------------------------------------
+
+# /jobs/view/senior-engineer-at-acme-4466829783, ?currentJobId=4466829783, or a bare id
+_LINKEDIN_ID_RE = re.compile(r"(?:jobs/view/(?:[^/?#]*?-)?|currentJobId=|jobPosting/)(\d{6,})")
+LINKEDIN_GUEST_URL = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
+
+
+def linkedin_job_id(url: str) -> str | None:
+    """The numeric posting id in a LinkedIn job URL, if this is one."""
+    if "linkedin.com" not in (url or "").lower():
+        return None
+    m = _LINKEDIN_ID_RE.search(url)
+    return m.group(1) if m else None
+
+
+def extract_linkedin_guest(page, url: str) -> dict | None:
+    """Fetch a LinkedIn posting through the signed-out guest endpoint.
+
+    The normal /jobs/view/ page shows a sign-in wall to a headless browser: the
+    description is either truncated to the company blurb or missing entirely, which
+    is what makes the cascade fall through to the LLM and come back empty. The
+    guest endpoint the logged-out job card uses serves the whole posting as HTML.
+    """
+    job_id = linkedin_job_id(url)
+    if not job_id:
+        return None
+    try:
+        resp = page.goto(LINKEDIN_GUEST_URL.format(job_id=job_id), timeout=30000)
+        if not resp or resp.status != 200:
+            log.warning("LinkedIn guest endpoint returned %s for %s", resp.status if resp else "no response", job_id)
+            return None
+        html = page.content()
+    except Exception as e:  # noqa: BLE001 - fall back to the normal cascade
+        log.warning("LinkedIn guest fetch failed (%s); using the normal cascade", e)
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+    block = soup.select_one(".show-more-less-html__markup, .description__text")
+    if not block:
+        return None
+    description = clean_description(str(block))
+    description = re.sub(r"(?:\n\s*Show (?:more|less)\s*)+$", "", description).strip()  # guest-card chrome
+    if len(description) < 100:
+        return None
+
+    def _text(selector: str) -> str:
+        el = soup.select_one(selector)
+        return el.get_text(strip=True) if el else ""
+
+    apply_url = None
+    code = soup.select_one("code#applyUrl")
+    if code:
+        apply_url = re.sub(r"^<!--|-->$", "", code.get_text(strip=True)).strip('"') or None
+
+    return {
+        "full_description": description,
+        "title": _text(".topcard__title, .top-card-layout__title"),
+        "company": _text(".topcard__org-name-link, .topcard__flavor, .top-card-layout__second-subline a"),
+        "application_url": apply_url,
+        "final_url": url,
+    }
+
+
 def clean_description(text: str) -> str:
     """Convert HTML description to clean readable text."""
     if not text:
@@ -568,6 +631,16 @@ def scrape_detail_page(page, url: str) -> dict:
     intel = collect_detail_intelligence(page)
     result["final_url"] = intel.get("final_url") or url
     result["page_title"] = intel.get("page_title") or ""
+
+    # Tier 0: LinkedIn's guest endpoint (the signed-out page is a login wall)
+    if linkedin_job_id(result["final_url"]) or linkedin_job_id(url):
+        guest = extract_linkedin_guest(page, result["final_url"] or url)
+        if guest:
+            result.update(guest)
+            result["tier_used"] = 0
+            result["status"] = "ok" if guest.get("application_url") else "partial"
+            result["elapsed"] = time.time() - t0
+            return result
 
     # Tier 1: JSON-LD
     json_ld_result = extract_from_json_ld(intel)

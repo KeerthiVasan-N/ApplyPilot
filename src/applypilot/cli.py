@@ -269,9 +269,15 @@ def tailor_url(
         help="Output folder. Default: <data dir>/output/<company>_<role>/",
     ),
     no_pdf: bool = typer.Option(False, "--no-pdf", help="Write the .tex only, skip PDF compilation."),
+    ats_target: int = typer.Option(
+        90, "--ats-target",
+        help="Keyword match to aim for. Below it, the missing terms are added and listed in things_to_learn.md.",
+    ),
+    no_ats: bool = typer.Option(False, "--no-ats", help="Skip the ATS keyword pass entirely (tailor wording only)."),
 ) -> None:
     """Tailor a LaTeX resume to ONE job URL (skips discover/score; never applies)."""
     from applypilot.config import load_env, ensure_dirs, get_llm_status
+    from applypilot.scoring import ats
     from applypilot.scoring import tailor_tex as tt
 
     load_env()
@@ -288,34 +294,61 @@ def tailor_url(
         raise typer.Exit(1)
 
     try:
-        with console.status("[bold]1/4[/bold] Fetching job posting..."):
+        with console.status("[bold]1/5[/bold] Fetching job posting..."):
             job = tt.fetch_job(url)
-        console.print(f"[green]1/4[/green] Job: [bold]{job['title']}[/bold] at [bold]{job['company']}[/bold]  "
+        console.print(f"[green]1/5[/green] Job: [bold]{job['title']}[/bold] at [bold]{job['company']}[/bold]  "
                       f"[dim]({len(job['full_description'])} chars, tier {job.get('tier_used')})[/dim]")
 
-        with console.status("[bold]2/4[/bold] Tailoring resume with the LLM (may retry)..."):
+        with console.status("[bold]2/5[/bold] Tailoring resume with the LLM (may retry)..."):
             tailored, report = tt.tailor_latex(original, job)
-        console.print(f"[green]2/4[/green] Tailored and verified in {report['attempts']} attempt(s)")
+        console.print(f"[green]2/5[/green] Tailored and verified in {report['attempts']} attempt(s)")
+
+        ats_result = None
+        if no_ats:
+            console.print("[yellow]3/5[/yellow] Skipped the ATS keyword pass (--no-ats)")
+        else:
+            with console.status("[bold]3/5[/bold] Scoring ATS keyword match..."):
+                tailored, ats_result = ats.boost(original, tailored, job, target=ats_target)
+            before, after = ats_result["score_before"], ats_result["score_after"]
+            colour = "green" if after >= ats_target else "yellow"
+            arrow = f"{before}% -> {after}%" if after != before else f"{after}%"
+            console.print(f"[{colour}]3/5[/{colour}] ATS keyword match: [bold]{arrow}[/bold] "
+                          f"[dim]({len(ats_result['keywords'])} keywords from the posting)[/dim]")
+            if ats_result["added"]:
+                console.print(f"[dim]   Added: {', '.join(k['term'] for k in ats_result['added'])}[/dim]")
+            if ats_result["problems"] and not ats_result["added"]:
+                console.print(f"[yellow]   Keyword pass rejected, kept the safe version: "
+                              f"{ats_result['problems'][0]}[/yellow]")
 
         out_dir = out or tt.output_dir_for(job)
         tex_path = tt.write_outputs(out_dir, original, tailored, job)
-        console.print(f"[green]3/4[/green] Wrote {tex_path}")
+        console.print(f"[green]4/5[/green] Wrote {tex_path}")
+
+        learn_path = None
+        if ats_result and (ats_result["added"] or ats_result["missing_after"] or ats_result["problems"]):
+            with console.status("[bold]4/5[/bold] Writing the study plan..."):
+                notes = ats.study_notes(ats_result["added"], job)
+                learn_path = ats.write_learning_plan(out_dir, job, ats_result, ats_result["added"], notes)
+            console.print(f"[dim]   Wrote {learn_path.name}: "
+                          f"{len(ats_result['added'])} to learn, {len(ats_result['missing_after'])} still unmatched[/dim]")
 
         pdf_path = None
         if no_pdf:
-            console.print("[yellow]4/4[/yellow] Skipped PDF (--no-pdf)")
+            console.print("[yellow]5/5[/yellow] Skipped PDF (--no-pdf)")
         else:
-            with console.status("[bold]4/4[/bold] Compiling PDF..."):
+            with console.status("[bold]5/5[/bold] Compiling PDF..."):
                 pdf_path = tt.compile_pdf(tex_path)
                 pages = tt.pdf_page_count(pdf_path)
                 if pages > tt.MAX_PDF_PAGES:
                     console.print(f"[yellow]   PDF is {pages} pages; asking the LLM to tighten wording...[/yellow]")
-                    tailored, _ = tt.shorten_latex(original, tailored, job)
+                    keep = {t.lower() for k in (ats_result["added"] if ats_result else [])
+                            for t in [k["term"], *k.get("aliases", [])]}
+                    tailored, _ = tt.shorten_latex(original, tailored, job, allow_skills=keep)
                     tex_path = tt.write_outputs(out_dir, original, tailored, job)
                     pdf_path = tt.compile_pdf(tex_path)
                     pages = tt.pdf_page_count(pdf_path)
             plural = "s" if pages != 1 else ""
-            console.print(f"[green]4/4[/green] Compiled PDF ({pages} page{plural})")
+            console.print(f"[green]5/5[/green] Compiled PDF ({pages} page{plural})")
             if pages > tt.MAX_PDF_PAGES:
                 console.print(f"[yellow]   Still {pages} pages. Check the PDF and trim manually if needed.[/yellow]")
     except tt.TailorError as e:
@@ -333,6 +366,8 @@ def tailor_url(
     console.print(f"[bold]TEX:[/bold]  {tex_path}")
     if pdf_path:
         console.print(f"[bold]PDF:[/bold]  {pdf_path}")
+    if learn_path:
+        console.print(f"[bold]LEARN:[/bold] {learn_path}  [dim](what the resume now claims -- study before the call)[/dim]")
     console.print("[dim]Also in that folder: job.txt (what the LLM saw) and changes.diff (what it changed)[/dim]")
 
 

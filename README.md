@@ -174,11 +174,36 @@ companies, titles, dates and every metric are untouched, then writes:
 
 ```
 <data dir>/output/<company>_<role>/
-  resume.tex     tailored LaTeX (same formatting as your original)
-  resume.pdf     compiled with tectonic or pdflatex (whichever is on PATH)
-  job.txt        the posting text the LLM saw
-  changes.diff   exactly what changed vs. your original
+  <Your_Name>.tex       tailored LaTeX (same formatting as your original)
+  <Your_Name>.pdf       compiled with tectonic or pdflatex (whichever is on PATH)
+  job.txt               the posting text the LLM saw
+  changes.diff          exactly what changed vs. your original
+  things_to_learn.txt   the terms added to hit the ATS target, and how to learn them
 ```
+
+The file name comes from the name in your resume header (`Keerthivasan_Natarajan.pdf`),
+because that is what a recruiter sees in their inbox.
+
+### The ATS keyword pass
+
+Rewording alone cannot match a term your resume never contained, and an ATS scores
+you on literal terms. So after the safe tailor pass, ApplyPilot pulls the posting's
+keywords out of the requirements, scores your resume against them (required terms
+count double), and if the match is under `--ats-target` (default 90%) it runs another
+pass that **adds the missing terms whether or not you have used them** -- skills onto
+the skills line, business-domain language into the summary. Rejected attempts are
+retried with the verifier's complaints fed back.
+
+What it will still never do: invent an employer, job title, project, date, metric,
+degree or certification. Those are checked line by line and a violating edit is thrown
+away. It adds technology *terms*, not history.
+
+Every added term lands in `things_to_learn.txt` under the heading **"on your resume
+now -- but not yet true"**, with what it is, 2-4 concrete things to learn, the question
+it invites, and an hour estimate. That file is the price of the higher score: read it
+before you reply to a recruiter, and delete from the `.tex` anything you are not
+willing to be questioned on. `--no-ats` skips the whole pass and keeps the
+reword-only resume.
 
 PDF compilation needs `tectonic` or `pdflatex` on PATH. Easiest: download `tectonic.exe`
 from the [tectonic releases](https://github.com/tectonic-typesetting/tectonic/releases)
@@ -187,7 +212,8 @@ the TeX packages it needs. `applypilot doctor` shows which compiler was found.
 Overleaf compiles with pdflatex by default; if you want byte-for-byte the same engine,
 install MiKTeX (`winget install MiKTeX.MiKTeX`) and set `LATEX_COMPILER=pdflatex` in `.env`.
 
-Options: `--out <folder>` to choose the output folder, `--no-pdf` to skip compiling.
+Options: `--out <folder>` to choose the output folder, `--no-pdf` to skip compiling,
+`--ats-target <n>` / `--no-ats` for the keyword pass above.
 Nothing is submitted; this command never touches the apply stage.
 
 Hitting Gemini free-tier limits? Put `LLM_PROVIDER=claude` in `.env` and every LLM call

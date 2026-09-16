@@ -539,10 +539,42 @@ def output_dir_for(job: dict) -> Path:
     return OUTPUT_DIR / f"{slugify(job['company'])}_{slugify(job['title'])}"
 
 
+# The candidate's name in the header block: `{\Huge \scshape Jane Doe}`, `\textbf{\LARGE Jane Doe}`,
+# `\name{Jane}{Doe}` or `\author{Jane Doe}` — the four shapes Overleaf resume templates use.
+_NAME_SIZE_RE = re.compile(
+    r"\\(?:Huge|huge|LARGE|Large)\s*(?:\\(?:scshape|bfseries|sc|sffamily|rmfamily)\s*)*([^\\{}\n]+)"
+)
+_NAME_CMD_RE = re.compile(r"\\(?:name|author)\s*\{([^\\{}\n]*)\}(?:\s*\{([^\\{}\n]*)\})?")
+
+
+def candidate_name(tex: str) -> str | None:
+    """Pull the person's name out of the resume header, or None if it isn't recognisable."""
+    body = tex.split(r"\begin{document}", 1)[-1][:2000]
+    # Header block first; \name/\author usually sit in the preamble, so scan the whole file for those.
+    for regex, text in ((_NAME_SIZE_RE, body), (_NAME_CMD_RE, body), (_NAME_CMD_RE, tex)):
+        for m in regex.finditer(text):
+            name = " ".join(g.strip() for g in m.groups() if g and g.strip())
+            name = re.sub(r"\s+", " ", name.replace("~", " ")).strip(" ,.")
+            if name and re.fullmatch(r"[A-Za-z][A-Za-z.'\- ]*", name):
+                return name
+    return None
+
+
+def resume_basename(name: str | None) -> str:
+    """File stem for the tailored resume: `Keerthivasan_Natarajan`, or `resume` if no name is found."""
+    if not name:
+        return "resume"
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    stem = "_".join(re.sub(r"[^A-Za-z0-9 ]+", " ", ascii_name).split())
+    return stem or "resume"
+
+
 def write_outputs(out_dir: Path, original: str, tailored: str, job: dict) -> Path:
-    """Write resume.tex plus job.txt and changes.diff for review. Returns the .tex path."""
+    """Write <Name>.tex plus job.txt and changes.diff for review. Returns the .tex path."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = out_dir / "resume.tex"
+    # Prefer the tailored copy's header; fall back to the original if the LLM mangled it.
+    stem = resume_basename(candidate_name(tailored) or candidate_name(original))
+    tex_path = out_dir / f"{stem}.tex"
     tex_path.write_text(tailored, encoding="utf-8")
     (out_dir / "job.txt").write_text(
         f"TITLE: {job['title']}\nCOMPANY: {job['company']}\nURL: {job['url']}\n"
@@ -552,7 +584,7 @@ def write_outputs(out_dir: Path, original: str, tailored: str, job: dict) -> Pat
     )
     diff = difflib.unified_diff(
         original.splitlines(), tailored.splitlines(),
-        fromfile="original/resume.tex", tofile="tailored/resume.tex", lineterm="",
+        fromfile=f"original/{stem}.tex", tofile=f"tailored/{stem}.tex", lineterm="",
     )
     (out_dir / "changes.diff").write_text("\n".join(diff) + "\n", encoding="utf-8")
     return tex_path
@@ -575,7 +607,7 @@ def find_latex_compiler() -> tuple[str, str] | None:
 
 
 def compile_pdf(tex_path: Path) -> Path:
-    """Compile resume.tex next to itself. Raises TailorError with the log tail on failure."""
+    """Compile the tailored .tex next to itself. Raises TailorError with the log tail on failure."""
     compiler = find_latex_compiler()
     if not compiler:
         raise TailorError(
@@ -590,7 +622,7 @@ def compile_pdf(tex_path: Path) -> Path:
     if name == "tectonic":
         # tectonic runs XeTeX, which lacks pdfTeX's ToUnicode helpers (\pdfgentounicode etc.,
         # common in Overleaf resume templates). XeTeX maps text natively, so compile a copy
-        # with those lines commented out; the saved resume.tex is left exactly as written.
+        # with those lines commented out; the saved .tex is left exactly as written.
         text = tex_path.read_text(encoding="utf-8")
         patched = _PDFTEX_ONLY_RE.sub(lambda m: "% [xetex] " + m.group(0), text)
         if patched != text:

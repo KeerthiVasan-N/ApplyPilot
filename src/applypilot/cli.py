@@ -274,6 +274,11 @@ def tailor_url(
         help="Keyword match to aim for. Below it, the missing terms are added and listed in things_to_learn.md.",
     ),
     no_ats: bool = typer.Option(False, "--no-ats", help="Skip the ATS keyword pass entirely (tailor wording only)."),
+    safe: bool = typer.Option(
+        False, "--safe",
+        help="Reword bullets in place instead of restructuring them: keep every bullet, its "
+             "count, and the work it describes. Weaker targeting, fewer surprises.",
+    ),
 ) -> None:
     """Tailor a LaTeX resume to ONE job URL (skips discover/score; never applies)."""
     from applypilot.config import load_env, ensure_dirs, get_llm_status
@@ -300,7 +305,7 @@ def tailor_url(
                       f"[dim]({len(job['full_description'])} chars, tier {job.get('tier_used')})[/dim]")
 
         with console.status("[bold]2/5[/bold] Tailoring resume with the LLM (may retry)..."):
-            tailored, report = tt.tailor_latex(original, job)
+            tailored, report = tt.tailor_latex(original, job, rewrite=not safe)
         console.print(f"[green]2/5[/green] Tailored and verified in {report['attempts']} attempt(s)")
 
         ats_result = None

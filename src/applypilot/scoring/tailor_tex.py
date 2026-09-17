@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import unicodedata
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,6 +31,9 @@ MAX_DESC_CHARS = 6000       # same cap the batch tailor uses
 MAX_RETRIES = 2             # LLM attempts after the first
 LENGTH_TOLERANCE = 0.15     # output may be up to this much SHORTER than the original
 LENGTH_GROWTH = 0.03        # ...but at most this much LONGER (a full one-page resume has no slack)
+REWRITE_GROWTH = 0.10       # rewriting restructures whole bullets, so the word count moves more.
+                            # The real limit is still one page: pdf_page_count checks it after
+                            # compiling, and the shorten pass tightens anything that overflows.
 MAX_PDF_PAGES = 1
 MAX_OUTPUT_TOKENS = 16384   # a full .tex plus the reasoning tokens thinking models spend
 
@@ -171,12 +175,7 @@ ALLOWED EDITS (only these):
    paragraph of similar length (max 3 sentences). Keep the surrounding
    \\item \\small{{...}} wrapper exactly, and use \\textbf{{}} on 3 to 6 keywords that
    appear in the job description AND are true of the candidate.
-2. Experience and Projects bullets: rephrase existing \\item bullets to surface
-   the most relevant responsibilities and use the job's terminology. Each bullet
-   must describe the same work as the original. You may reorder bullets within
-   one role. Keep the same number of bullets per role and roughly the same length
-   per bullet (within 15 percent). Move \\textbf{{}} emphasis to the keywords that
-   matter for this job.
+2. Experience and Projects bullets: {bullet_rule}
 3. Skills: in the "{skills_section}" section, reorder categories and reorder
    items within a category so the most relevant come first. You may uncomment a
    category line that is currently commented out with %, and you may comment out
@@ -188,10 +187,16 @@ FORBIDDEN (any of these fails the job):
 - Changing anything before \\begin{{document}}: preamble, packages, macros.
 - Changing the header block (the first \\begin{{center}}...\\end{{center}}).
 - Changing any \\section name or order, or adding or removing sections.
-- Changing any company name, job title, project name, location, date range, or
-  anything in the education section.
-- Changing any number, percentage, duration, currency amount, or count
-  (for example 90%, 3.3s to 380ms, 500+, 100+, 40%, 24/7).
+- Touching a heading line. Every \\resumeSubheading / \\resumeProjectHeading line and
+  the {{...}} argument lines under it are copied CHARACTER FOR CHARACTER: the job
+  title, the employer, the project name, the location, the dates, and the
+  \\emph{{...}} tech stack. That tech stack is a fact about what that project was
+  actually built with -- do not add this posting's technologies to it, do not
+  reorder it, do not drop anything from it. Work the posting's terms into the
+  BULLETS instead, where they describe what was actually done.
+- Changing anything in the education section.
+- Inventing any number, percentage, duration, currency amount, or count that is
+  not already in the resume (for example 90%, 3.3s to 380ms, 500+, 40%, 24/7).
 - Adding a skill, tool, framework, language, certification, or achievement that
   does not appear somewhere in the original file, including in comments.
 - Adding, removing, or renaming any \\begin{{...}}/\\end{{...}} environment.
@@ -208,19 +213,66 @@ STYLE:
 
 HARD LIMITS (checked by a program; violating any one rejects your output):
 {hard_limits}
-- Do NOT add, remove, split or merge bullets anywhere.
 - Do NOT add new skill categories. Do NOT add a skill item unless that exact term
   already appears somewhere in the original file.
 - Do NOT touch anything before \\begin{{document}}, the header block, or the
   education section: copy those lines character for character.
 
-SELF-CHECK before you answer: count the bullets per section, confirm the word
-count is inside the budget, confirm no new skills, confirm the output starts with
-the original first line and ends with \\end{{document}}, with no fences or notes."""
+SELF-CHECK before you answer: confirm the word count is inside the budget, confirm
+every number and date in your output also appears in the original, confirm no new
+skills, and confirm the output starts with the original first line and ends with
+\\end{{document}}, with no fences or notes."""
 
 
-def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH) -> str:
-    """Concrete numbers for the prompt: bullets per section and the word budget."""
+# Rule 2 has two modes. The default freezes the section: same bullets, same count,
+# same work described -- safe, but too tight to actually argue for a role, because a
+# posting's priorities rarely map one-to-one onto how the bullets were first written.
+# REWRITE_BULLET_RULE lets the model restructure the experience instead. What does not
+# move in either mode is the part an interviewer can check: employer, title, dates,
+# degree, and every number.
+
+SAFE_BULLET_RULE = """rephrase existing \\item bullets to surface
+   the most relevant responsibilities and use the job's terminology. Each bullet
+   must describe the same work as the original. You may reorder bullets within
+   one role. Keep the same number of bullets per role and roughly the same length
+   per bullet (within 15 percent). Move \\textbf{{}} emphasis to the keywords that
+   matter for this job."""
+
+REWRITE_BULLET_RULE = """REWRITE THEM. This is the main event, not a
+   touch-up. For each role, work out what this posting is actually looking for and
+   make the bullets say it, in the posting's own vocabulary. You may:
+     - rewrite a bullet completely, in your own words, at whatever length serves it;
+     - merge two bullets, or split one into two;
+     - cut a bullet that says nothing for this job, to buy room for one that does;
+     - add a bullet for work the candidate really did that the original buried or
+       left out, including work evidenced by the skills and projects sections;
+     - revive a bullet that is sitting commented out with % in this file: those are
+       real, already-written bullets the candidate parked, and a commented-out one
+       that matches this posting is better than a live one that does not. Write it
+       as a normal live bullet; leave the original comment line where it is;
+     - reorder bullets so the most relevant leads each role.
+
+   Do this for EVERY role, not just the most recent one. An older role is often where
+   the experience this posting wants actually sits, and leaving it as first written
+   wastes the space it takes up.
+   Lead with the outcome or the system built, never with "Responsible for". Name the
+   technologies the posting names wherever they genuinely apply to that work, and put
+   \\textbf{{}} on the terms this employer is scanning for.
+
+   The line you do not cross: the WORK must be work this person actually did. You are
+   re-presenting real history in this employer's language -- choosing what to feature,
+   how to frame it, what to call it. You are not giving them a project, an employer, a
+   responsibility, a metric or a result they never had. If the posting wants something
+   their history simply does not contain, leave it out: it is something to study before
+   the interview, not something to claim on the page."""
+
+
+def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH, allow_rewrite: bool = False) -> str:
+    """Concrete numbers for the prompt: bullets per section and the word budget.
+
+    With `allow_rewrite` the per-section bullet counts are not stated, because the model
+    is allowed to change them. The word budget still applies -- the page is still a page.
+    """
     clean = _strip_comments(tex)
     body = _split_preamble(clean)
     words = len((body[1] if body else clean).split())
@@ -231,17 +283,32 @@ def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH) -> str:
         "trim words elsewhere to pay for it."
     )
     lines = [budget]
-    for name, text in _sections(clean):
-        if name:
-            lines.append(f"- Section \"{name}\": exactly {len(_ITEM_RE.findall(text))} \\item-style entries, same as now.")
+    if allow_rewrite:
+        lines.append(
+            "- Bullet counts are yours to choose: merge, split, cut or add within a role so the "
+            "page argues for THIS job. Every section must still end with at least one bullet."
+        )
+    else:
+        for name, text in _sections(clean):
+            if name:
+                lines.append(f"- Section \"{name}\": exactly {len(_ITEM_RE.findall(text))} \\item-style entries, same as now.")
     return "\n".join(lines)
 
 
-def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES) -> tuple[str, dict]:
-    """Return (tailored_tex, report). Raises TailorError if no attempt passes verification."""
+def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES,
+                 rewrite: bool = True) -> tuple[str, dict]:
+    """Return (tailored_tex, report). Raises TailorError if no attempt passes verification.
+
+    `rewrite=True` (the default) lets the model restructure the experience bullets for this
+    posting instead of only rewording them in place. Employers, titles, dates, degrees and
+    numbers are still fixed -- see `verify_latex_edit`.
+    """
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
-        summary_section=summary_section, skills_section=skills_section, hard_limits=_hard_limits(tex),
+        summary_section=summary_section, skills_section=skills_section,
+        hard_limits=_hard_limits(tex, REWRITE_GROWTH if rewrite else LENGTH_GROWTH,
+                                 allow_rewrite=rewrite),
+        bullet_rule=REWRITE_BULLET_RULE if rewrite else SAFE_BULLET_RULE,
     )
     job_text = (
         f"TITLE: {job['title']}\nCOMPANY: {job['company']}\nURL: {job['final_url']}\n\n"
@@ -266,7 +333,10 @@ def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES) -> tuple[s
         ]
         raw = client.chat(messages, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3)
         candidate = _splice_preamble(tex, _strip_fences(raw))
-        problems = verify_latex_edit(tex, candidate)
+        problems = verify_latex_edit(
+            tex, candidate, allow_rewrite=rewrite,
+            max_growth=REWRITE_GROWTH if rewrite else LENGTH_GROWTH,
+        )
         report["problems"] = problems
         if not problems:
             report["status"] = "verified"
@@ -295,6 +365,7 @@ def shorten_latex(
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
         summary_section=summary_section, skills_section=skills_section, hard_limits=_hard_limits(tex),
+        bullet_rule=SAFE_BULLET_RULE,
     )
     system += (
         "\n\nThe previous version compiled to more than one page. Tighten the wording of the "
@@ -493,12 +564,20 @@ def verify_latex_edit(
     allow_skills: set[str] | None = None,
     allow_new_categories: bool = False,
     max_growth: float = LENGTH_GROWTH,
+    allow_rewrite: bool = False,
 ) -> list[str]:
     """Return a list of human-readable problems; empty list means the edit is acceptable.
 
     `allow_skills` / `allow_new_categories` / `max_growth` are the knobs the ATS gap pass
     turns: that pass is allowed to add specific missing terms (see `scoring.ats`), while
     every other rule -- facts, dates, metrics, bullet counts -- still holds.
+
+    `allow_rewrite` lets the model restructure the experience itself: merge, split, drop
+    and reorder bullets so the page says what this posting asks for. The honesty rule
+    changes shape rather than relaxing -- instead of "every original number must survive"
+    it becomes "no number, date or employer that was not already there". You may cut your
+    own history; you may not acquire history you do not have. Titles, date ranges and the
+    education section stay verbatim in both modes.
     """
     problems: list[str] = []
 
@@ -577,8 +656,10 @@ def verify_latex_edit(
             continue
 
         o_items, t_items = len(_ITEM_RE.findall(o_text)), len(_ITEM_RE.findall(t_text))
-        if o_items != t_items:
+        if not allow_rewrite and o_items != t_items:
             problems.append(f"Bullet count changed in '{label}': {o_items} -> {t_items}.")
+        elif allow_rewrite and o_items and not t_items:
+            problems.append(f"'{label}' lost all of its bullets; a section cannot be emptied.")
 
         if name == summary_name:
             continue  # wording is free; facts checked globally below
@@ -592,23 +673,37 @@ def verify_latex_edit(
         # Role/project header lines (anything using \hfill: title, company, dates) must be verbatim and in order
         if _protected_lines(o_text) != _protected_lines(t_text):
             problems.append(
-                f"A title/company/date line (one containing \\hfill) changed in '{label}'; copy those lines verbatim."
+                f"A job title / employer / date line changed in '{label}'; copy those lines verbatim."
             )
 
-        # Italic arguments (locations, tech stacks, employer names) must survive
-        t_italics = Counter(_ITALIC_RE.findall(t_text))
-        for arg, cnt in Counter(_ITALIC_RE.findall(o_text)).items():
-            if t_italics[arg] < cnt:
-                problems.append(f"Italic text '{arg}' missing or altered in '{label}'; keep it exactly.")
+        o_italics, t_italics = Counter(_ITALIC_RE.findall(o_text)), Counter(_ITALIC_RE.findall(t_text))
+        o_dates = Counter(m.lower() for m in _DATE_RE.findall(o_text))
+        t_dates = Counter(m.lower() for m in _DATE_RE.findall(t_text))
+        o_nums, t_nums = Counter(_NUMBER_RE.findall(o_text)), Counter(_NUMBER_RE.findall(t_text))
 
-        # Every date and metric must survive
-        for tok, cnt in Counter(m.lower() for m in _DATE_RE.findall(o_text)).items():
-            if Counter(m.lower() for m in _DATE_RE.findall(t_text))[tok] < cnt:
-                problems.append(f"Date '{tok}' missing or altered in '{label}'.")
-        t_nums = Counter(_NUMBER_RE.findall(t_text))
-        for tok, cnt in Counter(_NUMBER_RE.findall(o_text)).items():
-            if t_nums[tok] < cnt:
-                problems.append(f"Metric '{tok}' missing or altered in '{label}'; keep every number exactly.")
+        if allow_rewrite:
+            # Rewriting means a bullet can be cut or merged, so a fact may legitimately
+            # disappear. What must never happen is one appearing: a date, a metric or an
+            # employer the candidate cannot back up in the interview.
+            for arg in sorted(a for a, n in t_italics.items() if n > o_italics[a]):
+                problems.append(f"Italic text '{arg}' in '{label}' is not in the original; invent nothing.")
+            for tok in sorted(t for t, n in t_dates.items() if n > o_dates[t]):
+                problems.append(f"Date '{tok}' in '{label}' is not in the original; dates are facts.")
+            for tok in sorted(t for t, n in t_nums.items() if n > o_nums[t]):
+                problems.append(f"Metric '{tok}' in '{label}' is not in the original; never invent a number.")
+        else:
+            # Italic arguments (locations, tech stacks, employer names) must survive
+            for arg, cnt in o_italics.items():
+                if t_italics[arg] < cnt:
+                    problems.append(f"Italic text '{arg}' missing or altered in '{label}'; keep it exactly.")
+
+            # Every date and metric must survive
+            for tok, cnt in o_dates.items():
+                if t_dates[tok] < cnt:
+                    problems.append(f"Date '{tok}' missing or altered in '{label}'.")
+            for tok, cnt in o_nums.items():
+                if t_nums[tok] < cnt:
+                    problems.append(f"Metric '{tok}' missing or altered in '{label}'; keep every number exactly.")
 
     if check_length:
         o_words, t_words = len(o_clean.split()), len(t_clean.split())
@@ -630,9 +725,36 @@ def _section_raw(tex: str, name: str) -> str:
     return ""
 
 
+_HEADING_RE = re.compile(
+    r"\\(?:hfill|resume(?:Sub)?(?:Sub)?[Hh]eading|resumeProjectHeading|resumeEducationHeading|cventry)\b"
+)
+
+
 def _protected_lines(section_text: str) -> list[str]:
-    """Lines that carry title/company/date facts: resume templates align those with \\hfill."""
-    return [line.strip() for line in section_text.splitlines() if "\\hfill" in line]
+    """Lines carrying employer / title / date facts, which must survive an edit verbatim.
+
+    Two conventions cover the common Overleaf resume templates: aligning the fields with
+    \\hfill, and the \\resumeSubheading{title}{dates}{company}{location} family. Matching
+    only \\hfill silently left the second kind unprotected -- the employer name was then
+    guarded by nothing but the prompt, which is not a guarantee.
+    """
+    lines = section_text.splitlines()
+    protected: list[str] = []
+    i = 0
+    while i < len(lines):
+        if not _HEADING_RE.search(lines[i]):
+            i += 1
+            continue
+        # \hfill templates put the whole row on one line; \resumeSubheading puts its
+        # {title}{dates}{company}{location} arguments on the lines below the macro, so
+        # keep taking following lines while they are still argument groups.
+        block = [lines[i].strip()]
+        i += 1
+        while i < len(lines) and lines[i].lstrip().startswith("{"):
+            block.append(lines[i].strip())
+            i += 1
+        protected.append(" ".join(block))
+    return protected
 
 
 # ── 4. Output and PDF ─────────────────────────────────────────────────────
@@ -644,7 +766,13 @@ def slugify(text: str, max_len: int = 40) -> str:
 
 
 def output_dir_for(job: dict) -> Path:
-    return OUTPUT_DIR / f"{slugify(job['company'])}_{slugify(job['title'])}"
+    """<output>/<DD-MM-YYYY>/<company>_<role>/ -- one dated folder per day of applying.
+
+    Everything tailored today lands under today's folder, which is created on first use
+    and reused for the rest of the day, so the output root stays one directory per day
+    instead of an ever-growing flat list of every job ever tailored.
+    """
+    return OUTPUT_DIR / datetime.now().strftime("%d-%m-%Y") / f"{slugify(job['company'])}_{slugify(job['title'])}"
 
 
 # The candidate's name in the header block: `{\Huge \scshape Jane Doe}`, `\textbf{\LARGE Jane Doe}`,

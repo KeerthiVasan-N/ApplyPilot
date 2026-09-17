@@ -348,7 +348,8 @@ def tailor_url(
                     console.print(f"[yellow]   PDF is {pages} pages; asking the LLM to tighten wording...[/yellow]")
                     keep = {t.lower() for k in (ats_result["added"] if ats_result else [])
                             for t in [k["term"], *k.get("aliases", [])]}
-                    shortened, shorten_report = tt.shorten_latex(original, tailored, job, allow_skills=keep)
+                    shortened, shorten_report = tt.shorten_latex(original, tailored, job,
+                                                                 allow_skills=keep, rewrite=not safe)
                     if shorten_report["status"] == "verified":
                         tailored = shortened
                         tex_path = tt.write_outputs(out_dir, original, tailored, job)

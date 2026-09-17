@@ -354,6 +354,7 @@ def shorten_latex(
     job: dict,
     allow_skills: set[str] | None = None,
     max_retries: int = MAX_RETRIES,
+    rewrite: bool = True,
 ) -> tuple[str, dict]:
     """Trim wording so the PDF fits on one page. Returns (tex, report); never raises.
 
@@ -361,10 +362,16 @@ def shorten_latex(
     not in the original, so the verifier has to be told they may stay. If no attempt
     verifies, `tailored` comes back untouched with status "failed_verification" --
     a resume that runs long is still a resume, so this never sinks the run.
+
+    `rewrite` must match the mode that produced `tailored`. Verification here compares
+    against the ORIGINAL, so a tailored resume whose bullets were restructured fails the
+    bullet-count check unless the verifier is told restructuring was allowed -- which
+    would make every shorten attempt fail and leave the long version in place.
     """
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
-        summary_section=summary_section, skills_section=skills_section, hard_limits=_hard_limits(tex),
+        summary_section=summary_section, skills_section=skills_section,
+        hard_limits=_hard_limits(tex, allow_rewrite=rewrite),
         bullet_rule=SAFE_BULLET_RULE,
     )
     system += (
@@ -393,7 +400,8 @@ def shorten_latex(
             )),
         )
         problems = verify_latex_edit(
-            tex, candidate, check_length=False, allow_skills=allow_skills, allow_new_categories=bool(allow_skills),
+            tex, candidate, check_length=False, allow_skills=allow_skills,
+            allow_new_categories=bool(allow_skills), allow_rewrite=rewrite,
         )
         if not problems:
             return candidate, {"attempts": attempt + 1, "problems": [], "status": "verified"}

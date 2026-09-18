@@ -7,3 +7,14 @@ python -m applypilot tailor-url --url "<job url>" --resume resume.tex
 things to learn 
 python -m applypilot tailor-url -u "<url>" -r resume.tex --learn
 
+ai doing things 
+Read the job title off the page, if the scraper missed it — $0.004
+Pull the keywords out of the posting — $0.023
+Rewrite your resume for this job — $0.067
+Add the keywords still missing — $0.065
+Shorten it if the PDF came out 2 pages — $0.071
+Plus one more only if you pass --learn:
+
+Write up how to study each new term — $0.065
+That's it. Everything else is your own computer.
+![alt text](image.png)

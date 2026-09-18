@@ -359,9 +359,16 @@ def shorten_latex(
     """Trim wording so the PDF fits on one page. Returns (tex, report); never raises.
 
     `allow_skills` are terms the ATS gap pass already added to `tailored`; they are
-    not in the original, so the verifier has to be told they may stay. If no attempt
-    verifies, `tailored` comes back untouched with status "failed_verification" --
-    a resume that runs long is still a resume, so this never sinks the run.
+    not in the original, so the verifier has to be told they may stay. They are also
+    the whole point of that pass, and a shortening model treats a skills-line tail as
+    the cheapest thing in the file to cut -- so they are named in the prompt as
+    must-keep tokens and a candidate that drops one is sent back for another attempt.
+    If no attempt verifies, `tailored` comes back untouched with status
+    "failed_verification" -- a resume that runs long is still a resume, so this never
+    sinks the run. If attempts verify but all of them lose a keyword, the one that
+    lost the fewest comes back with status "verified_lossy" and the lost terms in
+    `report["dropped"]`: one page is worth more than the last term, but the caller
+    has to re-score rather than trust the number the gap pass reported.
 
     `rewrite` must match the mode that produced `tailored`. Verification here compares
     against the ORIGINAL, so a tailored resume whose bullets were restructured fails the
@@ -378,7 +385,7 @@ def shorten_latex(
         "\n\nThe previous version compiled to more than one page. Tighten the wording of the "
         "summary and bullets (fewer words, same facts, same bullet count) so it fits on one page.\n"
         "Shorten by cutting filler words, not facts. Every one of these tokens must still appear "
-        "in your output, spelled exactly as it is here:\n" + _must_keep(tailored)
+        "in your output, spelled exactly as it is here:\n" + _must_keep(tailored, allow_skills)
     )
     client = get_client()
     user = (
@@ -387,6 +394,7 @@ def shorten_latex(
     )
 
     problems: list[str] = []
+    best: tuple[str, list[str]] | None = None  # the verified candidate that lost the fewest terms
     for attempt in range(max_retries + 1):
         prompt = system
         if problems:
@@ -404,17 +412,76 @@ def shorten_latex(
             allow_new_categories=bool(allow_skills), allow_rewrite=rewrite,
         )
         if not problems:
-            return candidate, {"attempts": attempt + 1, "problems": [], "status": "verified"}
-        log.warning("Shorten attempt %d failed verification: %s", attempt + 1, "; ".join(problems))
+            dropped = _dropped_terms(tailored, candidate, allow_skills)
+            if not dropped:
+                return candidate, {"attempts": attempt + 1, "problems": [], "dropped": [],
+                                   "status": "verified"}
+            if best is None or len(dropped) < len(best[1]):
+                best = (candidate, dropped)
+            problems = ["you cut these keyword terms, which have to survive the trim: "
+                        + ", ".join(dropped)
+                        + ". Put them back and buy the space by cutting filler words, or by "
+                          "dropping a skills item this posting does not ask for."]
+        log.warning("Shorten attempt %d rejected: %s", attempt + 1, "; ".join(problems))
 
-    return tailored, {"attempts": max_retries + 1, "problems": problems, "status": "failed_verification"}
+    # Every attempt cost a keyword. One page is still worth more than the last term or two,
+    # so the least lossy one goes out -- but it goes out labelled, because the score the gap
+    # pass reported was measured on the text this one just replaced.
+    if best is not None:
+        log.warning("Shortened to one page but lost %d keyword term(s): %s",
+                    len(best[1]), ", ".join(best[1]))
+        return best[0], {"attempts": max_retries + 1, "problems": [], "dropped": best[1],
+                         "status": "verified_lossy"}
+    return tailored, {"attempts": max_retries + 1, "problems": problems, "dropped": [],
+                      "status": "failed_verification"}
 
 
 _TYPESETTING_NUMBER_RE = re.compile(r"(?:in|ex|pt|em|cm|mm)\b")
 
 
-def _must_keep(tex: str) -> str:
-    """The metrics and dates the shortening pass keeps losing, listed for the prompt."""
+def plain_text(tex: str) -> str:
+    """Flatten a .tex to the running text an ATS reads out of the PDF. Case is preserved."""
+    text = _strip_comments(tex)
+    text = _split_preamble(text)[1] if _split_preamble(text) else text
+    text = re.sub(r"\\href\{[^}]*\}", " ", text)                          # keep the link label, drop the URL
+    text = re.sub(r"\\(?:begin|end)\{[^}]*\}(?:\[[^\]]*\])?", " ", text)  # environment names are not skills
+    text = re.sub(r"\\[A-Za-z@]+\*?", " ", text)                          # command names
+    text = re.sub(r"[{}$&~^\\]", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
+def term_pattern(term: str) -> re.Pattern[str]:
+    """Match one keyword the way an ATS would: word-bounded, plural- and separator-tolerant."""
+    parts = [re.escape(p) for p in term.lower().split() if p]
+    if not parts:
+        return re.compile(r"(?!)")
+    core = r"[\s\-/]+".join(parts)
+    return re.compile(rf"(?<![A-Za-z0-9+#]){core}(?:s|es)?(?![A-Za-z0-9+#])", re.IGNORECASE)
+
+
+def _dropped_terms(before: str, after: str, terms: set[str] | None) -> list[str]:
+    """Keyword terms `before` carried and `after` lost, in the spelling `before` used.
+
+    Only terms actually present in `before` are owed: `terms` carries every alias of every
+    added keyword, and a resume that says "CI/CD" never owed the phrase it was aliased from.
+    """
+    if not terms:
+        return []
+    before_text, after_text = plain_text(before), plain_text(after)
+    dropped = []
+    for term in sorted(terms):
+        found = term_pattern(term).search(before_text)
+        if found and not term_pattern(term).search(after_text):
+            dropped.append(found.group(0))
+    return dropped
+
+
+def _must_keep(tex: str, keep_terms: set[str] | None = None) -> str:
+    """The tokens the shortening pass keeps losing, listed for the prompt.
+
+    Metrics and dates, plus `keep_terms`: the keywords the ATS gap pass put in, quoted in
+    the spelling this file uses so "spelled exactly as it is here" is true of them too.
+    """
     body = _strip_comments(_split_preamble(tex)[1] if _split_preamble(tex) else tex)
     body = re.sub(r"\\begin\{center\}.*?\\end\{center\}", " ", body, flags=re.DOTALL)  # header: phone, profile ids
     tokens: list[str] = []
@@ -427,6 +494,11 @@ def _must_keep(tex: str) -> str:
         if any(_TYPESETTING_NUMBER_RE.match(body[m.end():]) for m in re.finditer(re.escape(tok), body)):
             continue  # a LaTeX length like 0.15in, not a fact
         tokens.append(tok)
+    text = plain_text(tex)
+    for term in sorted(keep_terms or ()):
+        found = term_pattern(term).search(text)
+        if found and found.group(0) not in tokens:
+            tokens.append(found.group(0))
     return "  " + ", ".join(tokens)
 
 
@@ -773,14 +845,22 @@ def slugify(text: str, max_len: int = 40) -> str:
     return text[:max_len].rstrip("_") or "unknown"
 
 
-def output_dir_for(job: dict) -> Path:
+MATCHED_SUFFIX = "_ALREADY_MATCHED"   # marks a folder whose resume needed no rewrite
+
+
+def job_folder_name(job: dict, suffix: str = "") -> str:
+    """`<company>_<role>` for one job, plus an optional marker like MATCHED_SUFFIX."""
+    return f"{slugify(job['company'])}_{slugify(job['title'])}{suffix}"
+
+
+def output_dir_for(job: dict, suffix: str = "") -> Path:
     """<output>/<DD-MM-YYYY>/<company>_<role>/ -- one dated folder per day of applying.
 
     Everything tailored today lands under today's folder, which is created on first use
     and reused for the rest of the day, so the output root stays one directory per day
     instead of an ever-growing flat list of every job ever tailored.
     """
-    return OUTPUT_DIR / datetime.now().strftime("%d-%m-%Y") / f"{slugify(job['company'])}_{slugify(job['title'])}"
+    return OUTPUT_DIR / datetime.now().strftime("%d-%m-%Y") / job_folder_name(job, suffix)
 
 
 # The candidate's name in the header block: `{\Huge \scshape Jane Doe}`, `\textbf{\LARGE Jane Doe}`,

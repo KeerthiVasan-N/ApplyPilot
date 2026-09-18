@@ -1,0 +1,170 @@
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+\pagestyle{fancy}
+\fancyhf{} 
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+\pdfgentounicode=1
+
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+\begin{document}
+
+\begin{center}
+    {\Huge \scshape Keerthivasan Natarajan} \\[0.5ex]
+    \href{mailto:keerthivasannataraj@gmail.com}{keerthivasannataraj@gmail.com} $|$
+    6383507688 $|$ 
+    \href{https://linkedin.com/in/keerthi-vasan-83091321a}{linkedin.com/in/keerthivasan} $|$
+    \href{https://github.com/KeerthiVasan-N}{github.com/KeerthiVasan-N} $|$
+    \href{https://leetcode.com/u/Keerthivasan18/}{leetcode.com/keerthivasan18}
+\end{center}
+
+\section{Career Summary}
+\begin{itemize}[leftmargin=0.15in, label={}]
+  \item \small{Full-stack product engineer with 3+ years owning features \textbf{end-to-end} -- requirements, implementation, \textbf{testing methodologies}, \textbf{CI/CD} deployment and continuous improvement -- across \textbf{React} front ends, \textbf{Java} services and SQL and NoSQL stores. Ships \textbf{scalable}, reliable \textbf{LLM}-powered survey and customer-experience products on AWS with \textbf{AI-assisted development tools}, and has solved 900+ LeetCode problems.}
+  
+  
+\end{itemize}
+
+\section{Technical Skills}
+\begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Programming Languages}{: JavaScript, Java, SQL (MySQL)} \\
+     \textbf{Frameworks and Libraries}{: React, Node.js, Spring Boot, Angular, Redux} \\
+  
+     \textbf{System Design and Architecture}{: Microservices, Distributed Systems, Low-Level Design, Docker, Containerization, DevOps, OpenSearch (Elasticsearch), ClickHouse} \\
+   
+     \textbf{Software Engineering Practices}{: Code Reviews, Version Control (Git), Testing Methodologies, Unit Testing, Test Automation, Test Driven Development (TDD), Behavior Driven Development (BDD), Agile} \\
+     \textbf{AI-Assisted Development Tools}{: GitHub Copilot, Cursor, Claude Code, ChatGPT (OpenAI)}
+  
+    }}
+\end{itemize}
+
+\section{Experience}
+\resumeSubHeadingListStart
+
+  \resumeSubheading
+    {Associate Software Developer}{July 2024 -- Present}
+    {Exterro}{Chennai, Tamil Nadu}
+ \resumeItemListStart
+
+\resumeItem{Owned \textbf{LLM} features \textbf{end-to-end} for AgentMode, an AI eDiscovery platform -- requirements to production -- shipping \textbf{Docker}-containerized \textbf{Spring Boot} 3 \textbf{microservices} on \textbf{Java} 21: an LLM gateway routing \textbf{AWS} Bedrock traffic, an agent-configuration \textbf{REST API} and a document-processing service.}
+\resumeItem{Delivered the same features \textbf{across the full stack}: \textbf{React} chat and agent-management screens plus Angular components for Data Assist, against the REST and SSE streaming APIs I wrote.}
+
+ 
+  \resumeItem{Cut LLM costs by \textbf{90\% on cached tokens} with server-side \textbf{prompt caching} on Bedrock, and metered per-request token usage asynchronously (\texttt{@Async}) so billing adds no latency.}
+
+
+
+  \resumeItem{Built a shared \textbf{security} library for session authentication and HMAC-signed service calls, with \textbf{role-based access control} resolved against \textbf{Redis} role sets as \textbf{O(1) lookups}, failing closed to keep the platform \textbf{reliable}.}
+
+  \resumeItem{Integrated a \textbf{Python} AI service (Data Assist) with the Java platform -- Redis session validation, encrypted configuration and idempotent batched write-back -- collaborating with product owners in \textbf{Agile} iterations and \textbf{Git} code reviews.}
+
+
+\resumeItemListEnd
+  \resumeSubheading
+    {Product Developer}{May 2023 -- June 2024}
+    {Lumel Technologies}{Chennai, Tamil Nadu}
+    \resumeItemListStart
+      \resumeItem{Shipped backend evaluation features \textbf{end-to-end} for Codergaze, a coding interview platform, strengthening candidate screening \textbf{algorithms} with automated \textbf{unit testing}.}
+   
+      \resumeItem{Took \textbf{ownership of production issues}, debugging and fixing 100+ backend defects in report export and cutting reported issues by \textbf{40\%}.}
+    \resumeItemListEnd
+
+\resumeSubHeadingListEnd
+
+\section{Projects}
+\resumeSubHeadingListStart
+
+\resumeProjectHeading
+      {\textbf{PollGo Bot} $|$ \emph{Go, WhatsApp/Baileys, PM2, Azure, Signal Protocol}}{April 2026}
+      \resumeItemListStart
+        \resumeItem{Shipped a \textbf{high-performance} WhatsApp polling system \textbf{end-to-end} in Go, from custom group logic to a \textbf{resilient} PM2-managed process on an Azure VM holding 24/7 uptime.}
+        \resumeItem{Cut encryption latency by 88\% (3.3s to 380ms) for 500+ member groups by \textbf{profiling} and parallelizing the Signal protocol loop with Goroutines and WaitGroups.}
+     
+      \resumeItemListEnd
+
+  \resumeProjectHeading
+      {\textbf{E-commerce Backend} $|$ \emph{Spring Boot, Java, MySQL}}{May 2023}
+      \resumeItemListStart
+        \resumeItem{Built \textbf{REST APIs} for product catalog management with dynamic search by ID, name and type.}
+        \resumeItem{Modeled the \textbf{MySQL} schema and tuned queries so the backend stayed \textbf{scalable} and reliable under concurrent requests.}
+      \resumeItemListEnd
+
+\resumeSubHeadingListEnd
+
+\section{Education}
+
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l r}
+  \textbf{GRT Institute of Engineering and Technology, Anna University} & Tiruttani, Tamil Nadu \\
+  \textit{Bachelor of Engineering in Electronics and Communication Engineering} --- \textit{CGPA: 7.92/10.0} & \textit{August 2018 -- July 2022} \\
+\end{tabular*}
+
+
+\end{document}

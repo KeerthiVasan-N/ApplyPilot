@@ -17,6 +17,10 @@ So after tailoring we:
      claims is something you can go and get familiar with before the interview.
 
 Step 4 is the point of step 3: the file is the list of what to study.
+
+None of these numbers survive the one-page trim that may follow, because that pass rewrites
+the text they were measured on. `rescore` takes them again from the .tex that actually goes
+out, so what the run reports is what the PDF carries.
 """
 
 from __future__ import annotations
@@ -162,28 +166,15 @@ def _fallback_keywords(description: str) -> list[dict]:
 
 # ── 2. Scoring a resume against them ──────────────────────────────────────
 
-def resume_text(tex: str) -> str:
-    """Flatten a .tex to the plain text an ATS would read out of the PDF."""
-    text = tt._strip_comments(tex)
-    text = tt._split_preamble(text)[1] if tt._split_preamble(text) else text
-    text = re.sub(r"\\href\{[^}]*\}", " ", text)                          # keep the link label, drop the URL
-    text = re.sub(r"\\(?:begin|end)\{[^}]*\}(?:\[[^\]]*\])?", " ", text)  # environment names are not skills
-    text = re.sub(r"\\[A-Za-z@]+\*?", " ", text)                          # command names
-    text = re.sub(r"[{}$&~^\\]", " ", text)
-    return re.sub(r"\s+", " ", text).lower()
-
-
-def _term_re(term: str) -> re.Pattern[str]:
-    parts = [re.escape(p) for p in term.lower().split() if p]
-    if not parts:
-        return re.compile(r"(?!)")
-    core = r"[\s\-/]+".join(parts)
-    return re.compile(rf"(?<![A-Za-z0-9+#]){core}(?:s|es)?(?![A-Za-z0-9+#])")
+# Flattening a .tex and matching one term against it live in `tailor_tex`: the shortening
+# pass has to answer the same question ("is this keyword still in the file?") and the two
+# have to answer it identically, or a term this scorer counts is one that pass may cut.
+resume_text = tt.plain_text
 
 
 def contains_term(text: str, keyword: dict) -> bool:
     """True if the resume text carries the keyword or any of its aliases."""
-    return any(_term_re(t).search(text) for t in [keyword["term"], *keyword.get("aliases", [])])
+    return any(tt.term_pattern(t).search(text) for t in [keyword["term"], *keyword.get("aliases", [])])
 
 
 def score(tex: str, keywords: list[dict]) -> dict:
@@ -398,6 +389,7 @@ def write_learning_plan(out_dir: Path, job: dict, result: dict, added: list[dict
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "things_to_learn.txt"
     before, after = result["score_before"], result["score_after"]
+    origin = result.get("score_original", before)
     still_missing = result["missing_after"]
     company = job.get("company", "").strip()
     title = job.get("title", "this role").strip() + (f"  at  {company}" if company else "")
@@ -407,7 +399,9 @@ def write_learning_plan(out_dir: Path, job: dict, result: dict, added: list[dict
         "THINGS TO LEARN",
         title,
         RULE,
-        f"ATS keyword match : {before}% -> {after}%   (target {result.get('target', TARGET_SCORE)}%)",
+        # yours -> tailored -> keyword pass, with the steps that moved nothing collapsed
+        f"ATS keyword match : {progression(origin, before, after)}"
+        f"   (your resume -> generated; target {result.get('target', TARGET_SCORE)}%)",
         f"Generated         : {date.today().isoformat()} from the posting in job.txt",
         "",
     ]
@@ -499,12 +493,35 @@ def write_learning_plan(out_dir: Path, job: dict, result: dict, added: list[dict
 
 # ── 5. One call that does the whole thing ─────────────────────────────────
 
+def progression(*scores: int) -> str:
+    """"40% -> 80%": the score at each stage, with steps that moved nothing collapsed."""
+    parts: list[str] = []
+    for s in scores:
+        text = f"{s}%"
+        if not parts or parts[-1] != text:
+            parts.append(text)
+    return " -> ".join(parts)
+
+
+def baseline(original: str, job: dict) -> dict:
+    """Score the untouched resume against one posting, before anything is generated.
+
+    Returns {"keywords", "score", "matched", "missing"}. The keyword list comes back so
+    the caller can hand it to `boost`, which would otherwise re-extract it: the before
+    and after numbers only mean anything when both are measured against the same terms.
+    """
+    keywords = extract_keywords(job)
+    result = score(original, keywords)
+    return {"keywords": keywords, **result}
+
+
 def boost(
     original: str,
     tailored: str,
     job: dict,
     target: int = TARGET_SCORE,
     rounds: int = GAP_ROUNDS,
+    keywords: list[dict] | None = None,
 ) -> tuple[str, dict]:
     """Score the tailored .tex, close the gaps until it reaches target, and report.
 
@@ -512,11 +529,18 @@ def boost(
     so a round that improves the score but stays under target is run again with only
     what is still missing. Returns (tex, result) carrying the scores, the added terms
     and any problems. Never raises: a failed boost just means the tailored resume as-is.
+
+    `keywords` skips the extraction call when the caller already scored the untouched
+    resume against this posting (see `baseline`); the two scores are only comparable
+    when they come from the same keyword list.
     """
-    keywords = extract_keywords(job)
+    if keywords is None:
+        keywords = extract_keywords(job)
+    untouched = score(original, keywords)
     before = score(tailored, keywords)
     result = {
         "keywords": keywords,
+        "score_original": untouched["score"],
         "score_before": before["score"],
         "score_after": before["score"],
         "matched_before": before["matched"],
@@ -550,3 +574,26 @@ def boost(
         problems=problems,
     )
     return tex, result
+
+
+def rescore(original: str, tex: str, result: dict) -> dict:
+    """Re-measure a `boost` result against the .tex that is actually going out.
+
+    `boost` reports on the text it produced, but the one-page trim then rewrites that text
+    and a trim pays for space with words -- sometimes the keyword words. So the score, the
+    unmatched list and the terms the study plan calls "not yet true" all have to be taken
+    again from the final file, or the run reports a number the PDF does not have.
+
+    Returns a new dict; `result` is left alone. `score_before` keeps its meaning: what the
+    tailored resume was worth before the keyword pass.
+    """
+    keywords = result.get("keywords") or []
+    if not keywords:
+        return dict(result)
+    now = score(tex, keywords)
+    return {
+        **result,
+        "score_after": now["score"],
+        "missing_after": now["missing"],
+        "added": added_terms(original, tex, keywords),
+    }

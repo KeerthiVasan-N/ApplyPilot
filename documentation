@@ -1,0 +1,4 @@
+at start source .venv/Scripts/activate
+
+source .venv/Scripts/activate
+python -m applypilot tailor-url --url "<job url>" --resume resume.tex

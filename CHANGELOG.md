@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `applypilot tailor-url --url <posting> --resume <file.tex>`: tailor a LaTeX resume to a single
   job URL without running discover/enrich/score. Reuses the enrichment cascade, edits only summary,
   bullet wording and skills ordering, verifies facts/structure deterministically, compiles to PDF.
+- `tailor-url` scores your untouched resume against the posting *before* generating anything, and
+  reports the whole progression (`54% -> 71% -> 92%`: yours -> tailored -> keyword pass) on screen
+  and at the top of `things_to_learn.txt`. Keywords are extracted once and reused by the gap pass,
+  so the baseline costs no extra LLM call. `ats.baseline()` is the new entry point.
+- `tailor-url --skip-above <n>`: a resume already scoring that well against the posting is sent
+  untouched, skipping the tailor and gap passes (the two whole-`.tex` round trips that dominate
+  the token cost). The job still gets its folder and PDF, named `<company>_<role>_ALREADY_MATCHED`
+  and with no `things_to_learn.txt` -- nothing was added, so there is nothing to study.
+  Defaults to `--ats-target` (90), so feeding a tailored resume back in -- the same posting a
+  second time, or a resume already written for that stack -- costs one scoring call instead of
+  two whole-`.tex` round trips. Pass `--skip-above 0` to tailor every time.
+- `tailor-url` takes several postings in one run: repeat `--url`, pass a comma-separated list, or
+  use `--urls-file <file>` (one URL per line, `#` comments ignored). Jobs are tailored one after
+  another into their own folders, a failure does not stop the rest (`--stop-on-error` to change
+  that), and the run ends with an `N/M tailored` summary.
 - `APPLYPILOT_DIR` can now be set from a project-local `.env` file (loaded before paths resolve).
 - JSON-LD enrichment now also returns `title` and `company`.
 - `applypilot doctor` reports whether a LaTeX compiler (tectonic/pdflatex) is available.
@@ -21,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Claude Code CLI (`claude -p`, tools disabled), so no Gemini/OpenAI key or quota is needed.
 
 ### Fixed
+- The one-page trim no longer quietly undoes the keyword pass. It used to be told only that the
+  ATS terms *may* stay, while the prompt's must-keep list held numbers and dates only -- so a
+  skills-line tail was the cheapest thing in the file to cut, and a run that reported `51% -> 97%`
+  could write a `.tex` scoring 58%. The added terms are now named in the must-keep list in the
+  spelling the file uses, a trim that drops one is sent back for another attempt, and the score,
+  `things_to_learn.txt` and the run summary are all re-measured from the file that goes out
+  (`ats.rescore()`). If every attempt costs a term, the least lossy one still ships -- one page is
+  worth more than the last keyword -- but the run says which terms it cost and what the real score is.
 - Default Gemini model is now `gemini-3.6-flash`; `gemini-2.0-flash` and `gemini-2.5-flash` return 404
   for new API keys. A Gemini 404 now reports Google's message (which names the replacement model)
   and the `LLM_MODEL` override instead of failing silently.

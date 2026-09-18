@@ -167,6 +167,22 @@ LaTeX resume to one posting:
 applypilot tailor-url --url "https://boards.example.com/jobs/123" --resume path/to/main.tex
 ```
 
+Several postings in one run: repeat `--url`, pass a comma-separated list, or point
+`--urls-file` at a text file with one URL per line (blank lines and `#` comments are
+ignored). Each job is fetched, tailored and compiled in turn into its own folder:
+
+```bash
+applypilot tailor-url -r resume.tex \
+  -u "https://boards.example.com/jobs/123" \
+  -u "https://jobs.other.com/456"
+
+applypilot tailor-url -r resume.tex -f jobs.txt
+```
+
+A failed URL does not stop the rest -- the run ends with a `N/M tailored` summary
+listing what failed and why, and exits non-zero. `--stop-on-error` aborts at the first
+failure instead.
+
 It follows redirects to the employer's real posting, extracts the description
 (same cascade as the enrich stage), asks the LLM to edit **only** the summary,
 bullet wording and skills ordering, verifies that the preamble, header, sections,
@@ -186,10 +202,57 @@ because that is what a recruiter sees in their inbox.
 
 ### The ATS keyword pass
 
+**Before anything is generated**, the posting's keywords are pulled out of the
+requirements and your resume is scored against them untouched, so you see what it was
+worth for that job on its own -- and, at the end, what the tailoring bought:
+
+```
+2/6 Your resume as-is: 54%  (13/24 keywords from the posting; 11 missing)
+    Missing: Kubernetes, Kafka, Terraform, gRPC, ...
+...
+4/6 ATS keyword match: 54% -> 71% -> 92%  (yours -> tailored -> keyword pass, target 90%)
+```
+
+The same three numbers head `things_to_learn.txt`. `--no-ats` skips the baseline along
+with the rest of the keyword work.
+
+Because the baseline is known before any rewriting, `--skip-above <n>` short-circuits
+a job you already fit:
+
+```bash
+applypilot tailor-url -r resume.tex -f jobs.txt --skip-above 88
+```
+
+A posting your resume already scores 88%+ on is sent untouched: no rewrite, no keyword
+pass. Those two calls are each a whole `.tex` in and a whole `.tex` back (plus retries),
+so they are the bulk of the token bill -- skipping them leaves only the posting fetch and
+the keyword extraction.
+
+The default is `--ats-target` (90), which matters most when you feed a tailored resume
+back in -- the same posting again, or a resume already written for that stack. Generating
+a second time what the first run already got to 90% is the one case where the bill buys
+nothing, so it is off by default. Pass `--skip-above 0` to tailor every time.
+
+You still get the full folder and the PDF, but named so you can see at a glance which
+resumes were rewritten and which went out as they already were:
+
+```
+output/17-09-2026/
+  acme_corp_backend_engineer/                    tailored, with a study plan
+    Keerthivasan_Natarajan.tex / .pdf
+    job.txt  changes.diff  things_to_learn.txt
+  globex_platform_engineer_ALREADY_MATCHED/      sent as-is, nothing to study
+    Keerthivasan_Natarajan.tex / .pdf
+    job.txt  changes.diff
+```
+
+A skipped job has no `things_to_learn.txt`: nothing was added to the resume, so there is
+nothing you need to study before the call -- the folder name is the whole report.
+
 Rewording alone cannot match a term your resume never contained, and an ATS scores
-you on literal terms. So after the safe tailor pass, ApplyPilot pulls the posting's
-keywords out of the requirements, scores your resume against them (required terms
-count double), and if the match is under `--ats-target` (default 90%) it runs another
+you on literal terms. So after the safe tailor pass, ApplyPilot scores the tailored
+version against those same keywords (required terms count double), and if the match is
+under `--ats-target` (default 90%) it runs another
 pass that **adds the missing terms whether or not you have used them** -- skills onto
 the skills line, business-domain language into the summary. Rejected attempts are
 retried with the verifier's complaints fed back.
@@ -212,8 +275,9 @@ the TeX packages it needs. `applypilot doctor` shows which compiler was found.
 Overleaf compiles with pdflatex by default; if you want byte-for-byte the same engine,
 install MiKTeX (`winget install MiKTeX.MiKTeX`) and set `LATEX_COMPILER=pdflatex` in `.env`.
 
-Options: `--out <folder>` to choose the output folder, `--no-pdf` to skip compiling,
-`--ats-target <n>` / `--no-ats` for the keyword pass above.
+Options: `--out <folder>` to choose the output folder (with several URLs it is the
+parent folder and each job gets its own `<company>_<role>/` subfolder), `--no-pdf` to
+skip compiling, `--ats-target <n>` / `--no-ats` for the keyword pass above.
 Nothing is submitted; this command never touches the apply stage.
 
 Hitting Gemini free-tier limits? Put `LLM_PROVIDER=claude` in `.env` and every LLM call

@@ -291,6 +291,7 @@ def _tailor_one_url(
     no_ats: bool,
     safe: bool,
     skip_above: int = 0,
+    headline: bool = False,
 ) -> dict:
     """Tailor `original` to one job URL and write the outputs. Raises on failure.
 
@@ -336,7 +337,7 @@ def _tailor_one_url(
         tailored = original
     else:
         with console.status("[bold]3/6[/bold] Tailoring resume with the LLM (may retry)..."):
-            tailored, report = tt.tailor_latex(original, job, rewrite=not safe)
+            tailored, report = tt.tailor_latex(original, job, rewrite=not safe, headline=headline)
         console.print(f"[green]3/6[/green] Tailored and verified in {report['attempts']} attempt(s)")
 
     ats_result = None
@@ -409,7 +410,8 @@ def _tailor_one_url(
                 keep = {t.lower() for k in (ats_result["added"] if ats_result else [])
                         for t in [k["term"], *k.get("aliases", [])]}
                 shortened, shorten_report = tt.shorten_latex(original, tailored, job,
-                                                             allow_skills=keep, rewrite=not safe)
+                                                             allow_skills=keep, rewrite=not safe,
+                                                             headline=headline)
                 if shorten_report["status"].startswith("verified"):
                     tailored = shortened
                     tex_path = tt.write_outputs(out_dir, original, tailored, job)
@@ -481,6 +483,12 @@ def tailor_url(
         help="Reword bullets in place instead of restructuring them: keep every bullet, its "
              "count, and the work it describes. Weaker targeting, fewer surprises.",
     ),
+    headline: bool = typer.Option(
+        True, "--headline/--no-headline",
+        help="Add one line under your name naming the role this posting is for, in the posting's "
+             "own words. Title-matching is the first thing a screener and a title filter do, and "
+             "this template has no such line. Nothing else in the header is touched.",
+    ),
     stop_on_error: bool = typer.Option(
         False, "--stop-on-error",
         help="With several URLs, stop at the first failure instead of carrying on with the rest.",
@@ -531,7 +539,7 @@ def tailor_url(
             results.append(_tailor_one_url(
                 url, original, out, nest=many,
                 no_pdf=no_pdf, ats_target=ats_target, no_ats=no_ats, safe=safe,
-                skip_above=skip_above,
+                skip_above=skip_above, headline=headline,
             ))
         except tt.TailorError as e:
             failures.append((url, str(e)))

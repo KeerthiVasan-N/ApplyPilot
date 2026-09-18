@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Defaults to `--ats-target` (90), so feeding a tailored resume back in -- the same posting a
   second time, or a resume already written for that stack -- costs one scoring call instead of
   two whole-`.tex` round trips. Pass `--skip-above 0` to tailor every time.
+- `tailor-url --headline` (on by default, `--no-headline` to turn off): the tailor pass may add one
+  line under your name naming the role this posting is for, in the posting's own words, optionally
+  with 3-5 of its core technologies. Title matching is the first thing a recruiter and a title filter
+  do, and the sb2nov template has no such line. The header stays frozen otherwise: every original
+  header line must still be present and unchanged, at most one line may be added, and that line may
+  not contain a number, a date or a credential -- a headline says which job you are applying for,
+  which is not a claim anyone can check and find false.
 - `tailor-url` takes several postings in one run: repeat `--url`, pass a comma-separated list, or
   use `--urls-file <file>` (one URL per line, `#` comments ignored). Jobs are tailored one after
   another into their own folders, a failure does not stop the rest (`--stop-on-error` to change
@@ -36,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Claude Code CLI (`claude -p`, tools disabled), so no Gemini/OpenAI key or quota is needed.
 
 ### Fixed
+- A LaTeX length is no longer mistaken for an invented metric. `\\[0.5ex]`, `\vspace{-4pt}` and
+  `0.15in` carry a digit but claim nothing, and counting them as facts rejected honest edits --
+  most visibly a headline that copied the name line's `\\[0.5ex]` spacing, which failed with
+  "Metric '0.5' is not in the original". `_fact_numbers()` now makes that distinction once, by
+  looking at the unit that follows each number, and the verifier, the headline check and the
+  shortening pass's must-keep list all use it.
 - The one-page trim no longer quietly undoes the keyword pass. It used to be told only that the
   ATS terms *may* stay, while the prompt's must-keep list held numbers and dates only -- so a
   skills-line tail was the cheapest thing in the file to cut, and a run that reported `51% -> 97%`

@@ -261,6 +261,13 @@ What it will still never do: invent an employer, job title, project, date, metri
 degree or certification. Those are checked line by line and a violating edit is thrown
 away. It adds technology *terms*, not history.
 
+It also writes a **headline** under your name -- the role this posting is for, in the
+posting's own words, optionally with a few of its core technologies. A title filter and
+a recruiter's first three seconds both match on that line, and this template does not
+have one. It is the only edit allowed inside the header: every other header line is
+compared and must be unchanged, only one line may be added, and it may not contain a
+number, a date or a credential. `--no-headline` turns it off.
+
 Every added term lands in `things_to_learn.txt` under the heading **"on your resume
 now -- but not yet true"**, with what it is, 2-4 concrete things to learn, the question
 it invites, and an hour estimate. That file is the price of the higher score: read it

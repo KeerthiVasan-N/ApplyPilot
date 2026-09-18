@@ -32,6 +32,7 @@ MAX_RETRIES = 2             # LLM attempts after the first
 LENGTH_TOLERANCE = 0.15     # output may be up to this much SHORTER than the original
 LENGTH_GROWTH = 0.03        # ...but at most this much LONGER (a full one-page resume has no slack)
 REWRITE_GROWTH = 0.10       # rewriting restructures whole bullets, so the word count moves more.
+HEADLINE_WORDS = 12         # a headline line is added, not swapped in: the budget has to fund it.
                             # The real limit is still one page: pdf_page_count checks it after
                             # compiling, and the shorten pass tightens anything that overflows.
 MAX_PDF_PAGES = 1
@@ -182,10 +183,10 @@ ALLOWED EDITS (only these):
    a category that is irrelevant, but only using lines already present in the
    file. Keep the "\\textbf{{Category}}{{: items}} \\\\" pattern and keep the trailing
    \\\\ on every visible line except the last visible one.
-
+{headline_rule}
 FORBIDDEN (any of these fails the job):
 - Changing anything before \\begin{{document}}: preamble, packages, macros.
-- Changing the header block (the first \\begin{{center}}...\\end{{center}}).
+{header_rule}
 - Changing any \\section name or order, or adding or removing sections.
 - Touching a heading line. Every \\resumeSubheading / \\resumeProjectHeading line and
   the {{...}} argument lines under it are copied CHARACTER FOR CHARACTER: the job
@@ -222,6 +223,26 @@ SELF-CHECK before you answer: confirm the word count is inside the budget, confi
 every number and date in your output also appears in the original, confirm no new
 skills, and confirm the output starts with the original first line and ends with
 \\end{{document}}, with no fences or notes."""
+
+
+# The header is the first thing a screener reads and the first thing a title filter matches on,
+# and this template gives it a name and contact links but no statement of what the candidate is.
+# So it is the one part of the file that is worth opening up: a headline is a claim about which
+# job you are applying for, not a claim about your history, and nothing in it can be checked and
+# found false. Everything identifying stays frozen -- name, email, phone, every profile link.
+HEADLINE_RULE = """4. Headline: the header block has the candidate's name and contact links. You may
+   add ONE new line to it, directly under the name, naming the role this posting
+   is for as the posting itself spells it, optionally followed by 3 to 5 of the
+   core technologies it asks for that are genuinely in this resume. Match the
+   file's existing style (for example "{\\scshape Job Title} $|$ Tech, Tech, Tech \\\\").
+   If such a line is already there, rewrite it for this posting instead of adding
+   a second one. Never change the name, the email, the phone number or any link,
+   and never put a number, a date or a span of years in this line."""
+
+HEADER_FROZEN_RULE = "- Changing the header block (the first \\begin{center}...\\end{center})."
+
+HEADER_HEADLINE_RULE = """- Changing the name, the email, the phone number or any \\href link in the header
+  block. The single headline line described above is the only thing you may add there."""
 
 
 # Rule 2 has two modes. The default freezes the section: same bullets, same count,
@@ -267,16 +288,21 @@ REWRITE_BULLET_RULE = """REWRITE THEM. This is the main event, not a
    the interview, not something to claim on the page."""
 
 
-def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH, allow_rewrite: bool = False) -> str:
+def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH, allow_rewrite: bool = False,
+                 headline: bool = False) -> str:
     """Concrete numbers for the prompt: bullets per section and the word budget.
 
     With `allow_rewrite` the per-section bullet counts are not stated, because the model
     is allowed to change them. The word budget still applies -- the page is still a page.
+
+    `headline` raises the ceiling by a headline's worth, because that line is added and
+    replaces nothing: charging it to the ordinary budget makes the model fail the length
+    check for obeying the instruction that told it to write the line.
     """
     clean = _strip_comments(tex)
     body = _split_preamble(clean)
     words = len((body[1] if body else clean).split())
-    lo, hi = int(words * (1 - LENGTH_TOLERANCE)), int(words * (1 + max_growth))
+    lo, hi = int(words * (1 - LENGTH_TOLERANCE)), int(words * (1 + max_growth)) + (HEADLINE_WORDS if headline else 0)
     budget = (
         f"- Word count of the document body (excluding comments) must stay between {lo} and {hi} "
         f"(original: {words}). The original already fills the page: if you uncomment a skills line, "
@@ -296,19 +322,24 @@ def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH, allow_rewrite: boo
 
 
 def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES,
-                 rewrite: bool = True) -> tuple[str, dict]:
+                 rewrite: bool = True, headline: bool = False) -> tuple[str, dict]:
     """Return (tailored_tex, report). Raises TailorError if no attempt passes verification.
 
     `rewrite=True` (the default) lets the model restructure the experience bullets for this
     posting instead of only rewording them in place. Employers, titles, dates, degrees and
     numbers are still fixed -- see `verify_latex_edit`.
+
+    `headline` opens the header block for one added line naming the target role. Everything
+    identifying in there -- name, email, phone, links -- stays frozen either way.
     """
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
         summary_section=summary_section, skills_section=skills_section,
         hard_limits=_hard_limits(tex, REWRITE_GROWTH if rewrite else LENGTH_GROWTH,
-                                 allow_rewrite=rewrite),
+                                 allow_rewrite=rewrite, headline=headline),
         bullet_rule=REWRITE_BULLET_RULE if rewrite else SAFE_BULLET_RULE,
+        headline_rule=(HEADLINE_RULE + "\n") if headline else "",
+        header_rule=HEADER_HEADLINE_RULE if headline else HEADER_FROZEN_RULE,
     )
     job_text = (
         f"TITLE: {job['title']}\nCOMPANY: {job['company']}\nURL: {job['final_url']}\n\n"
@@ -334,7 +365,7 @@ def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES,
         raw = client.chat(messages, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3)
         candidate = _splice_preamble(tex, _strip_fences(raw))
         problems = verify_latex_edit(
-            tex, candidate, allow_rewrite=rewrite,
+            tex, candidate, allow_rewrite=rewrite, allow_headline=headline,
             max_growth=REWRITE_GROWTH if rewrite else LENGTH_GROWTH,
         )
         report["problems"] = problems
@@ -355,6 +386,7 @@ def shorten_latex(
     allow_skills: set[str] | None = None,
     max_retries: int = MAX_RETRIES,
     rewrite: bool = True,
+    headline: bool = False,
 ) -> tuple[str, dict]:
     """Trim wording so the PDF fits on one page. Returns (tex, report); never raises.
 
@@ -370,16 +402,18 @@ def shorten_latex(
     `report["dropped"]`: one page is worth more than the last term, but the caller
     has to re-score rather than trust the number the gap pass reported.
 
-    `rewrite` must match the mode that produced `tailored`. Verification here compares
-    against the ORIGINAL, so a tailored resume whose bullets were restructured fails the
-    bullet-count check unless the verifier is told restructuring was allowed -- which
-    would make every shorten attempt fail and leave the long version in place.
+    `rewrite` and `headline` must match the mode that produced `tailored`. Verification here
+    compares against the ORIGINAL, so a tailored resume whose bullets were restructured -- or
+    whose header gained a headline -- fails those checks unless the verifier is told they were
+    allowed, which would make every shorten attempt fail and leave the long version in place.
     """
     summary_section, skills_section = _detect_special_sections(tex)
     system = SYSTEM_PROMPT.format(
         summary_section=summary_section, skills_section=skills_section,
         hard_limits=_hard_limits(tex, allow_rewrite=rewrite),
         bullet_rule=SAFE_BULLET_RULE,
+        headline_rule="",  # the trim shortens what is there; it never writes a new headline
+        header_rule=HEADER_HEADLINE_RULE if headline else HEADER_FROZEN_RULE,
     )
     system += (
         "\n\nThe previous version compiled to more than one page. Tighten the wording of the "
@@ -410,6 +444,7 @@ def shorten_latex(
         problems = verify_latex_edit(
             tex, candidate, check_length=False, allow_skills=allow_skills,
             allow_new_categories=bool(allow_skills), allow_rewrite=rewrite,
+            allow_headline=headline,
         )
         if not problems:
             dropped = _dropped_terms(tailored, candidate, allow_skills)
@@ -437,6 +472,18 @@ def shorten_latex(
 
 
 _TYPESETTING_NUMBER_RE = re.compile(r"(?:in|ex|pt|em|cm|mm)\b")
+
+
+def _fact_numbers(text: str) -> list[str]:
+    """The numbers in `text` that are claims -- 90%, 3.3s, 500+, 24/7 -- and not typesetting.
+
+    A LaTeX length is not a metric: `\\\\[0.5ex]`, `\\vspace{-4pt}` and `0.15in` carry a digit
+    but claim nothing, and treating them as facts makes an honest edit look like an invented
+    number. Position matters, so this checks the unit that follows each match rather than
+    asking whether the token appears as a length anywhere in the file.
+    """
+    return [m.group(0).strip() for m in _NUMBER_RE.finditer(text)
+            if not _TYPESETTING_NUMBER_RE.match(text[m.end():])]
 
 
 def plain_text(tex: str) -> str:
@@ -485,14 +532,11 @@ def _must_keep(tex: str, keep_terms: set[str] | None = None) -> str:
     body = _strip_comments(_split_preamble(tex)[1] if _split_preamble(tex) else tex)
     body = re.sub(r"\\begin\{center\}.*?\\end\{center\}", " ", body, flags=re.DOTALL)  # header: phone, profile ids
     tokens: list[str] = []
-    for tok in _NUMBER_RE.findall(body) + _DATE_RE.findall(body):
-        tok = tok.strip()
+    for tok in _fact_numbers(body) + [d.strip() for d in _DATE_RE.findall(body)]:
         if not tok or tok in tokens:
             continue
         if re.fullmatch(r"\d{7,}", tok):  # phone numbers and profile ids
             continue
-        if any(_TYPESETTING_NUMBER_RE.match(body[m.end():]) for m in re.finditer(re.escape(tok), body)):
-            continue  # a LaTeX length like 0.15in, not a fact
         tokens.append(tok)
     text = plain_text(tex)
     for term in sorted(keep_terms or ()):
@@ -637,6 +681,48 @@ def _words(text: str) -> set[str]:
     return {w for w in re.split(r"[^A-Za-z0-9+#]+", text.lower()) if w and w not in _FILLER_WORDS}
 
 
+# A headline is allowed to carry the file's own line-break styling (`\\[0.5ex]`, `{\scshape ...}`):
+# that is typesetting copied from the name line, not a claim. Strip it before looking for numbers.
+_HEADLINE_STYLE_RE = re.compile(r"\\\\\[[^\]]*\]|\\[A-Za-z@]+\*?|[{}]")
+
+
+def _headline_problems(o_head: str, t_head: str) -> list[str]:
+    """Check a changed header block against the one edit a headline is allowed to be.
+
+    The rule is subtraction, not pattern matching: every line of the original header has to
+    still be there, in order, and what is left over may be at most one new line. That keeps
+    the name, the phone number and every profile link exactly as they were whatever the model
+    does with the layout, without this having to know which line is which.
+    """
+    def lines(text: str) -> list[str]:
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    o_lines, t_lines = lines(o_head), lines(t_head)
+    problems: list[str] = []
+    added: list[str] = []
+    it = iter(t_lines)
+    for want in o_lines:
+        for got in it:
+            if got == want:
+                break
+            added.append(got)
+        else:
+            return [f"Header line {want!r} is missing or was altered; the name, phone and links "
+                    "are copied verbatim -- only a headline line may be added."]
+    added.extend(it)
+
+    if len(added) > 1:
+        problems.append(f"Only one headline line may be added to the header, got {len(added)}: {added}.")
+    for line in added:
+        claimed = _fact_numbers(_HEADLINE_STYLE_RE.sub(" ", line))
+        if claimed:
+            problems.append(f"Headline line {line!r} states {claimed}; a headline names the role, "
+                            "never years, dates or metrics. LaTeX spacing like \\\\[0.5ex] is fine.")
+        if _CREDENTIAL_RE.search(line):
+            problems.append(f"Headline line {line!r} claims a degree or certification; not allowed.")
+    return problems
+
+
 def verify_latex_edit(
     original: str,
     tailored: str,
@@ -645,12 +731,17 @@ def verify_latex_edit(
     allow_new_categories: bool = False,
     max_growth: float = LENGTH_GROWTH,
     allow_rewrite: bool = False,
+    allow_headline: bool = False,
 ) -> list[str]:
     """Return a list of human-readable problems; empty list means the edit is acceptable.
 
     `allow_skills` / `allow_new_categories` / `max_growth` are the knobs the ATS gap pass
     turns: that pass is allowed to add specific missing terms (see `scoring.ats`), while
     every other rule -- facts, dates, metrics, bullet counts -- still holds.
+
+    `allow_headline` permits exactly one added line in the header block -- the target role --
+    while every original header line, and so the name, phone and links, still has to be there
+    unchanged. See `_headline_problems`.
 
     `allow_rewrite` lets the model restructure the experience itself: merge, split, drop
     and reorder bullets so the page says what this posting asks for. The honesty rule
@@ -691,11 +782,16 @@ def verify_latex_edit(
     if invented:
         problems.append(f"New certification/degree wording {invented} is never allowed; remove it.")
 
-    # Header block must be identical
+    # Header block must be identical, except for the one headline line when that is allowed
     o_head = re.search(r"\\begin\{center\}.*?\\end\{center\}", o_body, re.DOTALL)
     t_head = re.search(r"\\begin\{center\}.*?\\end\{center\}", t_body, re.DOTALL)
-    if o_head and (not t_head or _norm(o_head.group(0)) != _norm(t_head.group(0))):
-        problems.append("Header block (\\begin{center}...\\end{center}) was modified; copy it verbatim.")
+    if o_head and not t_head:
+        problems.append("Header block (\\begin{center}...\\end{center}) is missing.")
+    elif o_head and _norm(o_head.group(0)) != _norm(t_head.group(0)):
+        if allow_headline:
+            problems += _headline_problems(o_head.group(0), t_head.group(0))
+        else:
+            problems.append("Header block (\\begin{center}...\\end{center}) was modified; copy it verbatim.")
 
     # Sections and environments (ignoring comments)
     o_clean, t_clean = _strip_comments(o_body), _strip_comments(t_body)
@@ -759,7 +855,7 @@ def verify_latex_edit(
         o_italics, t_italics = Counter(_ITALIC_RE.findall(o_text)), Counter(_ITALIC_RE.findall(t_text))
         o_dates = Counter(m.lower() for m in _DATE_RE.findall(o_text))
         t_dates = Counter(m.lower() for m in _DATE_RE.findall(t_text))
-        o_nums, t_nums = Counter(_NUMBER_RE.findall(o_text)), Counter(_NUMBER_RE.findall(t_text))
+        o_nums, t_nums = Counter(_fact_numbers(o_text)), Counter(_fact_numbers(t_text))
 
         if allow_rewrite:
             # Rewriting means a bullet can be cut or merged, so a fact may legitimately
@@ -787,7 +883,8 @@ def verify_latex_edit(
 
     if check_length:
         o_words, t_words = len(o_clean.split()), len(t_clean.split())
-        lo, hi = int(o_words * (1 - LENGTH_TOLERANCE)), int(o_words * (1 + max_growth))
+        lo = int(o_words * (1 - LENGTH_TOLERANCE))
+        hi = int(o_words * (1 + max_growth)) + (HEADLINE_WORDS if allow_headline else 0)
         if o_words and not lo <= t_words <= hi:
             problems.append(
                 f"Word count {t_words} is outside the allowed {lo}-{hi} (original {o_words}); "

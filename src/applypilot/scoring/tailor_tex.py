@@ -131,7 +131,7 @@ def _fill_title_company(job: dict, page_title: str) -> None:
         f"PAGE TITLE: {page_title}\n\nPOSTING:\n{job['full_description'][:3000]}"
     )
     try:
-        data = extract_json(get_client().ask(prompt, max_tokens=2048))
+        data = extract_json(get_client(fast=True).ask(prompt, max_tokens=2048))
         job["title"] = job["title"] or (data.get("title") or "").strip()
         job["company"] = job["company"] or (data.get("company") or "").strip()
     except Exception as e:  # noqa: BLE001 - best effort, fallbacks below

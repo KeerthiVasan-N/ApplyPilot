@@ -378,11 +378,29 @@ class _GeminiCompatForbidden(Exception):
 # ---------------------------------------------------------------------------
 
 _instance: LLMClient | None = None
+_fast_instance: LLMClient | None = None
 
 
-def get_client() -> LLMClient:
-    """Return (or create) the module-level LLMClient singleton."""
-    global _instance
+def get_client(fast: bool = False) -> LLMClient:
+    """Return (or create) an LLMClient singleton.
+
+    `fast=True` returns a client on `LLM_MODEL_FAST` when that is set, for the calls whose
+    output never reaches the resume -- reading a title off a page, pulling keywords out of a
+    posting, writing the study plan. Those are cheap to get right and, in the study plan's
+    case, the largest single output of a run, so paying top-tier rates for them buys nothing.
+    With `LLM_MODEL_FAST` unset this is the same client as `get_client()`, so nothing changes
+    until it is configured.
+    """
+    global _instance, _fast_instance
+    if fast:
+        fast_model = os.environ.get("LLM_MODEL_FAST", "").strip()
+        if not fast_model:
+            return get_client()
+        if _fast_instance is None:
+            base_url, _, api_key = _detect_provider()
+            log.info("LLM provider (fast lane): %s  model: %s", base_url, fast_model)
+            _fast_instance = LLMClient(base_url, fast_model, api_key)
+        return _fast_instance
     if _instance is None:
         base_url, model, api_key = _detect_provider()
         log.info("LLM provider: %s  model: %s", base_url, model)

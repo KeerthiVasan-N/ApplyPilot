@@ -77,7 +77,7 @@ def extract_keywords(job: dict) -> list[dict]:
     """ATS keywords for one posting: [{term, weight, aliases}]. Falls back to frequency analysis."""
     description = job.get("full_description", "")[: tt.MAX_DESC_CHARS]
     try:
-        raw = get_client().chat(
+        raw = get_client(fast=True).chat(
             [
                 {"role": "system", "content": EXTRACT_PROMPT},
                 {"role": "user", "content": (
@@ -343,7 +343,7 @@ def study_notes(terms: list[dict], job: dict) -> dict[str, dict]:
     if not terms:
         return {}
     try:
-        raw = get_client().chat(
+        raw = get_client(fast=True).chat(
             [
                 {"role": "system", "content": STUDY_PROMPT},
                 {"role": "user", "content": (

@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `--urls-file <file>` (one URL per line, `#` comments ignored). Jobs are tailored one after
   another into their own folders, a failure does not stop the rest (`--stop-on-error` to change
   that), and the run ends with an `N/M tailored` summary.
+- `LLM_MODEL_FAST`: a second model for the calls whose output never reaches the resume -- reading the
+  job title off the page, extracting the posting's keywords, and writing `things_to_learn.txt`. The
+  study plan alone is the largest single output of a run (9.5k characters for 18 terms), and none of
+  these three affect the generated `.tex`, so running them at top-tier rates buys nothing. The
+  tailoring, keyword-gap and one-page passes stay on `LLM_MODEL`. Unset, everything behaves as before.
 - `APPLYPILOT_DIR` can now be set from a project-local `.env` file (loaded before paths resolve).
 - JSON-LD enrichment now also returns `title` and `company`.
 - `applypilot doctor` reports whether a LaTeX compiler (tectonic/pdflatex) is available.

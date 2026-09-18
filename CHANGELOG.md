@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `--urls-file <file>` (one URL per line, `#` comments ignored). Jobs are tailored one after
   another into their own folders, a failure does not stop the rest (`--stop-on-error` to change
   that), and the run ends with an `N/M tailored` summary.
+- `tailor-url --learn` (off by default): the per-term coaching in `things_to_learn.txt` -- what each
+  added term is, 2-4 concrete things to learn, the question it invites, an hour estimate -- is now
+  opt-in. It is one LLM call and the largest single output of a run (9.5k characters for 18 terms).
+  The file is still written either way with the score and the list of terms the resume now claims:
+  that part costs nothing, falls out of the scoring already done, and is the only record of what
+  was added on your behalf.
 - `LLM_MODEL_FAST`: a second model for the calls whose output never reaches the resume -- reading the
   job title off the page, extracting the posting's keywords, and writing `things_to_learn.txt`. The
   study plan alone is the largest single output of a run (9.5k characters for 18 terms), and none of

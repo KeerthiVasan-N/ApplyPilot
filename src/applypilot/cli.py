@@ -292,6 +292,7 @@ def _tailor_one_url(
     safe: bool,
     skip_above: int = 0,
     headline: bool = False,
+    learn: bool = False,
 ) -> dict:
     """Tailor `original` to one job URL and write the outputs. Raises on failure.
 
@@ -392,11 +393,17 @@ def _tailor_one_url(
         console.print(f"[dim]   No study plan: nothing was added, folder marked "
                       f"{tt.MATCHED_SUFFIX.lstrip('_')}[/dim]")
     elif ats_result and (ats_result["added"] or ats_result["missing_after"] or ats_result["problems"]):
+        # The term list is free -- it falls out of the scoring already done -- and it is the only
+        # record of what this resume now claims on your behalf. The per-term notes are an LLM call
+        # and the largest single output of a run, so they are opt-in: `--learn` buys the coaching,
+        # the list is written either way.
         with console.status("[bold]5/6[/bold] Writing the study plan..."):
-            notes = ats.study_notes(ats_result["added"], job)
+            notes = ats.study_notes(ats_result["added"], job) if learn else {}
             learn_path = ats.write_learning_plan(out_dir, job, ats_result, ats_result["added"], notes)
+        detail = "" if learn else " [dim](term list only; --learn adds how to study each one)[/dim]"
         console.print(f"[dim]   Wrote {learn_path.name}: "
-                      f"{len(ats_result['added'])} to learn, {len(ats_result['missing_after'])} still unmatched[/dim]")
+                      f"{len(ats_result['added'])} to learn, "
+                      f"{len(ats_result['missing_after'])} still unmatched[/dim]{detail}")
 
     pdf_path = None
     if no_pdf:
@@ -483,6 +490,12 @@ def tailor_url(
         help="Reword bullets in place instead of restructuring them: keep every bullet, its "
              "count, and the work it describes. Weaker targeting, fewer surprises.",
     ),
+    learn: bool = typer.Option(
+        False, "--learn/--no-learn",
+        help="Write how to study each term the resume now claims -- what it is, 2-4 concrete things "
+             "to learn, the question it invites, an hour estimate. Off by default: it is one LLM call "
+             "and the largest output of a run. things_to_learn.txt still lists the terms either way.",
+    ),
     headline: bool = typer.Option(
         True, "--headline/--no-headline",
         help="Add one line under your name naming the role this posting is for, in the posting's "
@@ -539,7 +552,7 @@ def tailor_url(
             results.append(_tailor_one_url(
                 url, original, out, nest=many,
                 no_pdf=no_pdf, ats_target=ats_target, no_ats=no_ats, safe=safe,
-                skip_above=skip_above, headline=headline,
+                skip_above=skip_above, headline=headline, learn=learn,
             ))
         except tt.TailorError as e:
             failures.append((url, str(e)))

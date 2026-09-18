@@ -269,11 +269,14 @@ compared and must be unchanged, only one line may be added, and it may not conta
 number, a date or a credential. `--no-headline` turns it off.
 
 Every added term lands in `things_to_learn.txt` under the heading **"on your resume
-now -- but not yet true"**, with what it is, 2-4 concrete things to learn, the question
-it invites, and an hour estimate. That file is the price of the higher score: read it
+now -- but not yet true"**. That file is the price of the higher score: read it
 before you reply to a recruiter, and delete from the `.tex` anything you are not
 willing to be questioned on. `--no-ats` skips the whole pass and keeps the
 reword-only resume.
+
+Pass `--learn` to have each term written up as well -- what it is, 2-4 concrete things
+to learn, the question it invites, an hour estimate. That is an LLM call and the biggest
+output of a run, so it is off by default; the list of terms is written either way.
 
 PDF compilation needs `tectonic` or `pdflatex` on PATH. Easiest: download `tectonic.exe`
 from the [tectonic releases](https://github.com/tectonic-typesetting/tectonic/releases)

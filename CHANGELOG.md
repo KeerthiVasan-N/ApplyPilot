@@ -54,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Claude Code CLI (`claude -p`, tools disabled), so no Gemini/OpenAI key or quota is needed.
 
 ### Fixed
+- The LLM no longer retypes the preamble on every pass. `_splice_preamble` has always thrown the
+  model's preamble away and pasted the original back, so those ~1,900 characters -- a quarter of
+  every response -- were generated and deleted, three times per job. The tailoring, keyword-gap and
+  one-page prompts now ask for the document body only (`\begin{document}` to `\end{document}`),
+  which is ~18% of a job's tokens and makes every call, including every retry, that much shorter.
+  A model that ignores the instruction and returns the whole file still works: the splice handles
+  both shapes.
 - A LaTeX length is no longer mistaken for an invented metric. `\\[0.5ex]`, `\vspace{-4pt}` and
   `0.15in` carry a digit but claim nothing, and counting them as facts rejected honest edits --
   most visibly a headline that copied the name line's `\\[0.5ex]` spacing, which failed with

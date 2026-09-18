@@ -164,8 +164,13 @@ def _parse_page_title(page_title: str) -> tuple[str, str]:
 # ── 2. Tailor with the LLM ────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are editing a LaTeX resume so it targets one specific job posting. You will
-receive the complete .tex source and the job description. Return the complete,
-compilable .tex source and nothing else: no markdown fences, no commentary.
+receive the complete .tex source and the job description.
+
+Return ONLY the document body: start your answer at \\begin{{document}} and end it at
+\\end{{document}}, with no markdown fences and no commentary. Do NOT reproduce the
+preamble (everything above \\begin{{document}}) -- it is kept from the original file
+exactly as it is and anything you write there is discarded, so copying it out only
+costs you output you could spend on the resume itself.
 
 In this file the summary section is "{summary_section}" and the skills section is
 "{skills_section}".
@@ -185,7 +190,7 @@ ALLOWED EDITS (only these):
    \\\\ on every visible line except the last visible one.
 {headline_rule}
 FORBIDDEN (any of these fails the job):
-- Changing anything before \\begin{{document}}: preamble, packages, macros.
+- Writing anything before \\begin{{document}} or after \\end{{document}}.
 {header_rule}
 - Changing any \\section name or order, or adding or removing sections.
 - Touching a heading line. Every \\resumeSubheading / \\resumeProjectHeading line and
@@ -221,7 +226,7 @@ HARD LIMITS (checked by a program; violating any one rejects your output):
 
 SELF-CHECK before you answer: confirm the word count is inside the budget, confirm
 every number and date in your output also appears in the original, confirm no new
-skills, and confirm the output starts with the original first line and ends with
+skills, and confirm the output starts with \\begin{{document}} and ends with
 \\end{{document}}, with no fences or notes."""
 
 
@@ -359,7 +364,7 @@ def tailor_latex(tex: str, job: dict, max_retries: int = MAX_RETRIES,
             {"role": "system", "content": prompt},
             {"role": "user", "content": (
                 f"ORIGINAL LATEX RESUME:\n{tex}\n\n---\n\nTARGET JOB:\n{job_text}\n\n"
-                "Return the complete tailored .tex source:"
+                "Return the tailored document body, \\begin{document} to \\end{document}:"
             )},
         ]
         raw = client.chat(messages, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3)
@@ -424,7 +429,8 @@ def shorten_latex(
     client = get_client()
     user = (
         f"ORIGINAL LATEX RESUME:\n{tex}\n\n---\n\nTOO-LONG TAILORED VERSION:\n{tailored}\n\n---\n\n"
-        f"TARGET JOB: {job['title']} at {job['company']}\n\nReturn the shortened complete .tex source:"
+        f"TARGET JOB: {job['title']} at {job['company']}\n\n"
+        "Return the shortened document body, \\begin{document} to \\end{document}:"
     )
 
     problems: list[str] = []

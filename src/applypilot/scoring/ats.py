@@ -201,8 +201,9 @@ def score(tex: str, keywords: list[dict]) -> dict:
 
 GAP_PROMPT = """You are editing a LaTeX resume that has already been tailored to one job posting.
 An ATS keyword scan says it is missing terms the posting asks for. Your job is to put those
-terms into the resume. Return the complete compilable .tex source and nothing else: no
-markdown fences, no commentary, no refusal.
+terms into the resume. Return ONLY the document body -- start at \\begin{{document}}, end
+at \\end{{document}} -- with no markdown fences, no commentary, no refusal. The preamble is
+kept from the original file, so anything you write above \\begin{{document}} is discarded.
 
 The candidate has NOT necessarily used these technologies. Add them anyway -- they are
 studying them before the interview, and every term you add is recorded for them to learn.
@@ -230,7 +231,7 @@ FORBIDDEN (any of these fails the job and the edit is thrown away):
 - Adding, removing, splitting or merging bullets; changing the bullet count anywhere.
 - Changing any company, job title, project name, location, date, or the education section.
 - Changing any number, percentage, duration or count (90%, 3.3s to 380ms, 500+, 40%).
-- Changing anything before \\begin{{document}}, or the header block.
+- Writing anything before \\begin{{document}}, or changing the header block.
 - Inventing a job, employer, certification or degree. You add technology TERMS to the skills
   line and to wording -- never new history and never a credential.
 - Unescaped LaTeX specials in prose: write \\%, \\&, \\#, \\_. Use -- for dashes.
@@ -239,7 +240,7 @@ HARD LIMITS (checked by a program):
 {hard_limits}
 - The document must still compile and fit on one page: keep it tight.
 
-Return the complete .tex source."""
+Return the document body, \\begin{{document}} to \\end{{document}}."""
 
 
 def close_gaps(
@@ -278,7 +279,8 @@ def close_gaps(
     user = (
         f"TAILORED LATEX RESUME:\n{tailored}\n\n---\n\n"
         f"TARGET JOB: {job.get('title', '')} at {job.get('company', '')}\n\n"
-        "Return the complete .tex source with the missing terms added:"
+        "Return the document body with the missing terms added, "
+        "\\begin{document} to \\end{document}:"
     )
 
     problems: list[str] = []

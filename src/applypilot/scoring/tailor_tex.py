@@ -32,7 +32,14 @@ MAX_RETRIES = 2             # LLM attempts after the first
 LENGTH_TOLERANCE = 0.15     # output may be up to this much SHORTER than the original
 LENGTH_GROWTH = 0.03        # ...but at most this much LONGER (a full one-page resume has no slack)
 REWRITE_GROWTH = 0.10       # rewriting restructures whole bullets, so the word count moves more.
-HEADLINE_WORDS = 12         # a headline line is added, not swapped in: the budget has to fund it.
+                            # This is a guard against runaway length, NOT the one-page rule: it is
+                            # measured against the base resume, which says nothing about how much
+                            # of the page is free. Park a project and the base drops 47 words while
+                            # the page keeps its capacity -- tightening this to 0.03 then rejected
+                            # every attempt at 460 words on a page that holds ~506. The real
+                            # one-page enforcement is the trim loop, which measures the compiled PDF.
+HEADLINE_WORDS = 12         # a headline costs a line of the page, so the body must give one back
+MAX_TRIM_ROUNDS = 2         # one-page trims to attempt, each measured against the real page count
                             # The real limit is still one page: pdf_page_count checks it after
                             # compiling, and the shorten pass tightens anything that overflows.
 MAX_PDF_PAGES = 1
@@ -242,7 +249,9 @@ HEADLINE_RULE = """4. Headline: the header block has the candidate's name and co
    file's existing style (for example "{\\scshape Job Title} $|$ Tech, Tech, Tech \\\\").
    If such a line is already there, rewrite it for this posting instead of adding
    a second one. Never change the name, the email, the phone number or any link,
-   and never put a number, a date or a span of years in this line."""
+   and never put a number, a date or a span of years in this line.
+   This line costs the page a line: pay for it by cutting the same amount of wording
+   out of the summary or the bullets. The word budget below already assumes you did."""
 
 HEADER_FROZEN_RULE = "- Changing the header block (the first \\begin{center}...\\end{center})."
 
@@ -300,14 +309,15 @@ def _hard_limits(tex: str, max_growth: float = LENGTH_GROWTH, allow_rewrite: boo
     With `allow_rewrite` the per-section bullet counts are not stated, because the model
     is allowed to change them. The word budget still applies -- the page is still a page.
 
-    `headline` raises the ceiling by a headline's worth, because that line is added and
-    replaces nothing: charging it to the ordinary budget makes the model fail the length
-    check for obeying the instruction that told it to write the line.
+    `headline` LOWERS the ceiling by a headline's worth. The budget exists to keep the PDF on
+    one page, and a headline takes one of that page's lines: the body has to give a line back
+    to pay for it. Raising the ceiling instead -- reading the budget as a token allowance rather
+    than a page -- is what pushed resumes onto a second page.
     """
     clean = _strip_comments(tex)
     body = _split_preamble(clean)
     words = len((body[1] if body else clean).split())
-    lo, hi = int(words * (1 - LENGTH_TOLERANCE)), int(words * (1 + max_growth)) + (HEADLINE_WORDS if headline else 0)
+    lo, hi = int(words * (1 - LENGTH_TOLERANCE)), int(words * (1 + max_growth)) - (HEADLINE_WORDS if headline else 0)
     budget = (
         f"- Word count of the document body (excluding comments) must stay between {lo} and {hi} "
         f"(original: {words}). The original already fills the page: if you uncomment a skills line, "
@@ -392,8 +402,13 @@ def shorten_latex(
     max_retries: int = MAX_RETRIES,
     rewrite: bool = True,
     headline: bool = False,
+    cut_words: int = 0,
 ) -> tuple[str, dict]:
     """Trim wording so the PDF fits on one page. Returns (tex, report); never raises.
+
+    `cut_words` is how much actually has to go, measured from the compiled PDF -- the words
+    that spilled onto page two, plus a margin. "Make it shorter" leaves the model guessing at
+    a target and it guesses small, so the second page survives the trim; a number does not.
 
     `allow_skills` are terms the ATS gap pass already added to `tailored`; they are
     not in the original, so the verifier has to be told they may stay. They are also
@@ -420,9 +435,17 @@ def shorten_latex(
         headline_rule="",  # the trim shortens what is there; it never writes a new headline
         header_rule=HEADER_HEADLINE_RULE if headline else HEADER_FROZEN_RULE,
     )
+    target = (
+        f"Remove AT LEAST {cut_words} words. That is measured from the compiled PDF, not a "
+        f"suggestion: {cut_words} words is what did not fit. Cutting less means a second page "
+        "and the work is wasted.\n"
+        if cut_words else
+        "Tighten the wording so it fits on one page.\n"
+    )
     system += (
         "\n\nThe previous version compiled to more than one page. Tighten the wording of the "
         "summary and bullets (fewer words, same facts, same bullet count) so it fits on one page.\n"
+        + target +
         "Shorten by cutting filler words, not facts. Every one of these tokens must still appear "
         "in your output, spelled exactly as it is here:\n" + _must_keep(tailored, allow_skills)
     )
@@ -890,7 +913,7 @@ def verify_latex_edit(
     if check_length:
         o_words, t_words = len(o_clean.split()), len(t_clean.split())
         lo = int(o_words * (1 - LENGTH_TOLERANCE))
-        hi = int(o_words * (1 + max_growth)) + (HEADLINE_WORDS if allow_headline else 0)
+        hi = int(o_words * (1 + max_growth)) - (HEADLINE_WORDS if allow_headline else 0)
         if o_words and not lo <= t_words <= hi:
             problems.append(
                 f"Word count {t_words} is outside the allowed {lo}-{hi} (original {o_words}); "
@@ -1087,6 +1110,24 @@ _PDFTEX_ONLY_RE = re.compile(
     r"pdfminorversion\s*=\s*\d+|pdfcompresslevel\s*=\s*\d+|pdfobjcompresslevel\s*=\s*\d+)[^\n]*",
     re.MULTILINE,
 )
+
+
+def pdf_overflow_words(pdf_path: Path, margin: int = 15) -> int:
+    """How many words to cut so the PDF fits on one page: what spilled, plus a margin.
+
+    The spill is measured from the compiled PDF rather than guessed from the source, because
+    the source has no idea where the page breaks. The margin covers the line the last surviving
+    sentence sits on -- cutting exactly the overflow usually lands a word or two over again.
+    """
+    try:
+        from pypdf import PdfReader
+
+        pages = PdfReader(str(pdf_path)).pages
+        spilled = sum(len((p.extract_text() or "").split()) for p in pages[MAX_PDF_PAGES:])
+        return spilled + margin if spilled else 0
+    except Exception as e:  # noqa: BLE001 - a missing measurement just means a vaguer instruction
+        log.warning("Could not measure PDF overflow (%s); trimming without a word target", e)
+        return 0
 
 
 def pdf_page_count(pdf_path: Path) -> int:

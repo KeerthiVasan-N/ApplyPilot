@@ -54,6 +54,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Claude Code CLI (`claude -p`, tools disabled), so no Gemini/OpenAI key or quota is needed.
 
 ### Fixed
+- Resumes stopped spilling onto a second page, and the one-page rule moved to the only thing that
+  can actually enforce it: the compiled PDF. The trim now runs up to `MAX_TRIM_ROUNDS` times against
+  the real page count, and each round measures what spilled (`pdf_overflow_words`) and asks for that
+  many words back -- "Remove AT LEAST 45 words" instead of "tighten the wording" and hope. Two budget
+  bugs went with it: a headline was *raising* the word ceiling when it costs a line of the page (it
+  now lowers it), and the gap pass measured its allowance against the tailored text rather than the
+  original, letting the two compound so a 506-word resume could legitimately reach ~600.
+  `REWRITE_GROWTH` stays at 0.10 on purpose: it guards against runaway length, and because it is
+  measured against the base resume it knows nothing about free page space -- tightening it to 0.03
+  rejected every attempt at 460 words on a page that holds ~506, and failed three real jobs.
 - The LLM no longer retypes the preamble on every pass. `_splice_preamble` has always thrown the
   model's preamble away and pasted the original back, so those ~1,900 characters -- a quarter of
   every response -- were generated and deleted, three times per job. The tailoring, keyword-gap and

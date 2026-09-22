@@ -412,13 +412,21 @@ def _tailor_one_url(
         with console.status("[bold]6/6[/bold] Compiling PDF..."):
             pdf_path = tt.compile_pdf(tex_path)
             pages = tt.pdf_page_count(pdf_path)
-            if pages > tt.MAX_PDF_PAGES:
-                console.print(f"[yellow]   PDF is {pages} pages; asking the LLM to tighten wording...[/yellow]")
+            # Trim against the real page count, not a word estimate: the source cannot know
+            # where the page breaks, so each round measures what actually spilled and asks for
+            # that much back. One round used to be the whole story, and a trim that came up a
+            # line short left a two-page PDF with a shrug.
+            for _round in range(tt.MAX_TRIM_ROUNDS):
+                if pages <= tt.MAX_PDF_PAGES:
+                    break
+                cut = tt.pdf_overflow_words(pdf_path)
+                console.print(f"[yellow]   PDF is {pages} pages; asking the LLM to cut "
+                              f"{cut or 'the overflow'} words...[/yellow]")
                 keep = {t.lower() for k in (ats_result["added"] if ats_result else [])
                         for t in [k["term"], *k.get("aliases", [])]}
                 shortened, shorten_report = tt.shorten_latex(original, tailored, job,
                                                              allow_skills=keep, rewrite=not safe,
-                                                             headline=headline)
+                                                             headline=headline, cut_words=cut)
                 if shorten_report["status"].startswith("verified"):
                     tailored = shortened
                     tex_path = tt.write_outputs(out_dir, original, tailored, job)
@@ -443,6 +451,7 @@ def _tailor_one_url(
                 else:
                     console.print(f"[yellow]   Could not shorten without losing a fact "
                                   f"({shorten_report['problems'][0]}); kept the long version.[/yellow]")
+                    break
         plural = "s" if pages != 1 else ""
         console.print(f"[green]6/6[/green] Compiled PDF ({pages} page{plural})")
         if pages > tt.MAX_PDF_PAGES:

@@ -273,7 +273,10 @@ def close_gaps(
             + "\n".join(_term_line(kw) for kw in domains) + "\n"
             if domains else ""
         ),
-        hard_limits=tt._hard_limits(tailored, GAP_LENGTH_GROWTH),
+        # Budget from the ORIGINAL, not from `tailored`: anchoring each pass to the output of
+        # the last one lets the allowances compound (tailor +10%, then gap +8% of that), which
+        # is how a one-page resume became two. The page never grew; the budget did.
+        hard_limits=tt._hard_limits(original, GAP_LENGTH_GROWTH),
     )
     allow = {t.lower() for kw in wanted for t in [kw["term"], *kw.get("aliases", [])]}
     user = (
